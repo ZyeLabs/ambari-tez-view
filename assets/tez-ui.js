@@ -280,6 +280,26 @@ define("tez-ui/adapters/dag-am", ["exports", "tez-ui/adapters/am"], function (ex
 
   });
 });
+define('tez-ui/adapters/dag-info', ['exports', 'tez-ui/adapters/timeline'], function (exports, _tezUiAdaptersTimeline) {
+  exports['default'] = _tezUiAdaptersTimeline['default'].extend({});
+});
+/**
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 define('tez-ui/adapters/dag', ['exports', 'tez-ui/adapters/timeline'], function (exports, _tezUiAdaptersTimeline) {
   exports['default'] = _tezUiAdaptersTimeline['default'].extend({});
 });
@@ -459,6 +479,8 @@ define("tez-ui/adapters/timeline", ["exports", "tez-ui/adapters/abstract"], func
       attemptID: 'TEZ_TASK_ATTEMPT_ID',
       hiveQueryID: 'HIVE_QUERY_ID',
       appID: 'applicationId',
+      DAG_ID: "DAG_ID",
+      APP_ID: "APP_ID",
 
       dagName: 'dagName',
       user: "user",
@@ -497,7 +519,7 @@ define("tez-ui/adapters/timeline", ["exports", "tez-ui/adapters/abstract"], func
         var filter = this.get("filters." + key);
 
         if (filter) {
-          if (!primaryFilter) {
+          if (!primaryFilter && !(filter === 'status' && value === 'RUNNING')) {
             primaryFilter = {};
             primaryFilter[filter] = value;
           } else {
@@ -859,7 +881,7 @@ define('tez-ui/components/column-selector', ['exports', 'ember', 'tez-ui/utils/m
       }
 
       return options.filter(function (option) {
-        return option.get('displayText').match(searchText);
+        return option.get('displayText').match(new RegExp(searchText, 'i'));
       });
     }),
 
@@ -1839,6 +1861,22 @@ define('tez-ui/components/em-table-column', ['exports', 'em-table/components/em-
     }
   });
 });
+define('tez-ui/components/em-table-facet-panel-values', ['exports', 'em-table/components/em-table-facet-panel-values'], function (exports, _emTableComponentsEmTableFacetPanelValues) {
+  Object.defineProperty(exports, 'default', {
+    enumerable: true,
+    get: function get() {
+      return _emTableComponentsEmTableFacetPanelValues['default'];
+    }
+  });
+});
+define('tez-ui/components/em-table-facet-panel', ['exports', 'em-table/components/em-table-facet-panel'], function (exports, _emTableComponentsEmTableFacetPanel) {
+  Object.defineProperty(exports, 'default', {
+    enumerable: true,
+    get: function get() {
+      return _emTableComponentsEmTableFacetPanel['default'];
+    }
+  });
+});
 define('tez-ui/components/em-table-header-cell', ['exports', 'em-table/components/em-table-header-cell'], function (exports, _emTableComponentsEmTableHeaderCell) {
   Object.defineProperty(exports, 'default', {
     enumerable: true,
@@ -2198,6 +2236,45 @@ define('tez-ui/components/error-bar', ['exports', 'ember'], function (exports, _
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+define('tez-ui/components/home-table-controls', ['exports', 'ember'], function (exports, _ember) {
+  exports['default'] = _ember['default'].Component.extend({
+    classNames: ['home-table-controls'],
+
+    countersLoaded: _ember['default'].computed("dataProcessor.processedRows.@each.counterGroupsHash", function () {
+      var processedRows = this.get("dataProcessor.processedRows"),
+          countersLoaded = true;
+      if (processedRows) {
+        countersLoaded = processedRows.some(function (row) {
+          return Object.keys(row.get("counterGroupsHash")).length !== 0;
+        });
+      }
+      return countersLoaded;
+    }),
+
+    actions: {
+      loadCounters: function loadCounters() {
+        this.get('targetObject.targetObject').send('loadCounters');
+      }
+    }
+  });
+});
+/**
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 define('tez-ui/components/jqui-accordion/component', ['exports', 'ember', 'ember-cli-jquery-ui/components/jqui-accordion/component'], function (exports, _ember, _emberCliJqueryUiComponentsJquiAccordionComponent) {
   exports['default'] = _emberCliJqueryUiComponentsJquiAccordionComponent['default'];
 });
@@ -2466,13 +2543,7 @@ define("tez-ui/components/stats-link", ["exports", "ember"], function (exports, 
     routeName: null,
     statsType: null,
 
-    searchText: _ember["default"].computed.oneWay("statsType"),
-    _statsType: _ember["default"].computed("statsType", function () {
-      var type = this.get("statsType");
-      if (type) {
-        return _ember["default"].String.capitalize(type.toLowerCase());
-      }
-    })
+    searchText: _ember["default"].computed.oneWay("statsType")
   });
 });
 /**
@@ -2795,7 +2866,7 @@ define('tez-ui/controllers/app/dags', ['exports', 'tez-ui/controllers/multi-tabl
     }, {
       id: 'status',
       headerTitle: 'Status',
-      contentPath: 'status',
+      contentPath: 'finalStatus',
       cellComponentName: 'em-table-status-cell',
       observePath: true
     }, {
@@ -2891,7 +2962,7 @@ define("tez-ui/controllers/application", ["exports", "ember"], function (exports
 
   var BREADCRUMB_PREFIX = [{
     text: "Home",
-    routeName: "home.queries"
+    routeName: "application"
   }];
 
   exports["default"] = _ember["default"].Controller.extend({
@@ -3536,7 +3607,7 @@ define('tez-ui/controllers/dag/index/index', ['exports', 'ember', 'tez-ui/contro
     }, {
       id: 'status',
       headerTitle: 'Status',
-      contentPath: 'status',
+      contentPath: 'finalStatus',
       cellComponentName: 'em-table-status-cell',
       observePath: true
     }, {
@@ -3880,6 +3951,7 @@ define('tez-ui/controllers/dag/tasks', ['exports', 'tez-ui/controllers/multi-tab
       headerTitle: 'Successful/Last Attempt Log',
       cellComponentName: 'em-table-tasks-log-link-cell',
       enableSearch: false,
+      contentPath: 'logs',
       getCellContent: function getCellContent(row) {
         var attemptID = row.get("successfulAttemptID");
         if (!attemptID) {
@@ -4000,7 +4072,7 @@ define('tez-ui/controllers/dag/vertices', ['exports', 'tez-ui/controllers/multi-
             case "pendingTasks":
               this.send("openModal", {
                 title: "Cannot sort!",
-                content: 'Sorting on ' + columnName + ' is disabled for running DAGs!'
+                content: 'Sorting on ' + columnName + ' is disabled for running DAGs while Auto Refresh is enabled!'
               });
               return false;
           }
@@ -4033,11 +4105,11 @@ define("tez-ui/controllers/home", ["exports", "tez-ui/controllers/abstract"], fu
     breadcrumbs: null,
 
     tabs: [{
-      text: "Hive Queries",
-      routeName: "home.queries"
-    }, {
       text: "All DAGs",
       routeName: "home.index"
+    }, {
+      text: "Hive Queries",
+      routeName: "home.queries"
     }]
   });
 });
@@ -4088,7 +4160,7 @@ define('tez-ui/controllers/home/index', ['exports', 'ember', 'tez-ui/controllers
     loadingMore: false,
 
     headerComponentNames: ['dags-page-search', 'table-controls', 'pagination-ui'],
-    footerComponentNames: ['pagination-ui'],
+    footerComponentNames: ['home-table-controls', 'pagination-ui'],
 
     _definition: _emTableUtilsTableDefinition['default'].create(),
     // Using computed, as observer won't fire if the property is not used
@@ -4124,7 +4196,9 @@ define('tez-ui/controllers/home/index', ['exports', 'ember', 'tez-ui/controllers
         pageNum: this.get("pageNum"),
 
         moreAvailable: this.get("moreAvailable"),
-        loadingMore: this.get("loadingMore")
+        loadingMore: this.get("loadingMore"),
+
+        minRowsForFooter: 0
       });
 
       return definition;
@@ -4153,7 +4227,7 @@ define('tez-ui/controllers/home/index', ['exports', 'ember', 'tez-ui/controllers
     }, {
       id: 'status',
       headerTitle: 'Status',
-      contentPath: 'status',
+      contentPath: 'finalStatus',
       cellComponentName: 'em-table-status-cell',
       observePath: true
     }, {
@@ -4344,14 +4418,15 @@ define('tez-ui/controllers/home/queries', ['exports', 'ember', 'tez-ui/controlle
     }, {
       id: 'dagID',
       headerTitle: 'DAG ID',
-      contentPath: 'dag.firstObject.entityID',
+      contentPath: 'dagID',
       cellComponentName: 'em-table-linked-cell',
       minWidth: "250px",
       getCellContent: function getCellContent(row) {
+        var dagID = row.get("dagID") || row.get("dag.firstObject.entityID");
         return {
           routeName: "dag",
-          model: row.get("dag.firstObject.entityID"),
-          text: row.get("dag.firstObject.entityID")
+          model: dagID,
+          text: dagID
         };
       }
     }, {
@@ -4392,13 +4467,14 @@ define('tez-ui/controllers/home/queries', ['exports', 'ember', 'tez-ui/controlle
     }, {
       id: 'appID',
       headerTitle: 'Application Id',
-      contentPath: 'dag.firstObject.appID',
+      contentPath: 'appID',
       cellComponentName: 'em-table-linked-cell',
       getCellContent: function getCellContent(row) {
+        var appID = row.get("appID") || row.get("dag.firstObject.appID");
         return {
           routeName: "app",
-          model: row.get("dag.firstObject.appID"),
-          text: row.get("dag.firstObject.appID")
+          model: appID,
+          text: appID
         };
       }
     }, {
@@ -4740,7 +4816,8 @@ define('tez-ui/controllers/table', ['exports', 'ember', 'tez-ui/controllers/abst
         searchText: this.get("searchText"),
         sortColumnId: this.get("sortColumnId"),
         sortOrder: this.get("sortOrder"),
-        pageNo: this.get("pageNo")
+        pageNo: this.get("pageNo"),
+        headerAsSortButton: true
       });
     }),
 
@@ -4772,7 +4849,7 @@ define('tez-ui/controllers/table', ['exports', 'ember', 'tez-ui/controllers/abst
           case "progress":
             this.send("openModal", {
               title: "Cannot sort!",
-              content: 'Sorting on ' + columnName + ' is disabled for running DAGs!'
+              content: 'Sorting on ' + columnName + ' is disabled for running DAGs while Auto Refresh is enabled!'
             });
             return false;
         }
@@ -5571,6 +5648,7 @@ define('tez-ui/controllers/vertex/tasks', ['exports', 'tez-ui/controllers/multi-
       headerTitle: 'Successful/Last Attempt Log',
       cellComponentName: 'em-table-tasks-log-link-cell',
       enableSearch: false,
+      contentPath: 'logs',
       getCellContent: function getCellContent(row) {
         var attemptID = row.get("successfulAttemptID");
         if (!attemptID) {
@@ -5867,13 +5945,21 @@ define('tez-ui/entities/entity', ['exports', 'ember', 'tez-ui/mixins/name'], fun
 
       if (needs) {
         MoreObject.forEach(needs, function (name, needOptions) {
+          var loadNeed;
+
           needOptions = that.normalizeNeed(name, needOptions, parentModel, queryParams, urlParams);
 
           if (MoreObject.isFunction(needOptions.loadType)) {
             needOptions.loadType = needOptions.loadType.call(needOptions, parentModel);
           }
 
-          if (needOptions.loadType !== "demand") {
+          loadNeed = needOptions.loadType !== "demand";
+
+          if (options && options.demandNeeds) {
+            loadNeed = options.demandNeeds.indexOf(name) !== -1;
+          }
+
+          if (loadNeed) {
             var needLoader = that._loadNeed(loader, parentModel, needOptions, options);
 
             if (needOptions.loadType !== "lazy") {
@@ -6075,17 +6161,17 @@ define('tez-ui/helpers/is-array', ['exports', 'ember', 'ember-truth-helpers/help
 
   exports['default'] = forExport;
 });
-define('tez-ui/helpers/is-equal', ['exports', 'ember-bootstrap/helpers/is-equal'], function (exports, _emberBootstrapHelpersIsEqual) {
+define('tez-ui/helpers/is-equal', ['exports', 'ember-truth-helpers/helpers/is-equal'], function (exports, _emberTruthHelpersHelpersIsEqual) {
   Object.defineProperty(exports, 'default', {
     enumerable: true,
     get: function get() {
-      return _emberBootstrapHelpersIsEqual['default'];
+      return _emberTruthHelpersHelpersIsEqual['default'];
     }
   });
   Object.defineProperty(exports, 'isEqual', {
     enumerable: true,
     get: function get() {
-      return _emberBootstrapHelpersIsEqual.isEqual;
+      return _emberTruthHelpersHelpersIsEqual.isEqual;
     }
   });
 });
@@ -6975,8 +7061,33 @@ define('tez-ui/models/dag-am', ['exports', 'tez-ui/models/am'], function (export
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-define('tez-ui/models/dag', ['exports', 'ember', 'ember-data', 'tez-ui/models/am-timeline'], function (exports, _ember, _emberData, _tezUiModelsAmTimeline) {
+define('tez-ui/models/dag-info', ['exports', 'ember-data', 'tez-ui/models/am-timeline'], function (exports, _emberData, _tezUiModelsAmTimeline) {
   exports['default'] = _tezUiModelsAmTimeline['default'].extend({
+
+    dagPlan: _emberData['default'].attr('object'),
+    callerData: _emberData['default'].attr('object')
+
+  });
+});
+/**
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+define('tez-ui/models/dag', ['exports', 'ember', 'ember-data', 'tez-ui/models/dag-info'], function (exports, _ember, _emberData, _tezUiModelsDagInfo) {
+  exports['default'] = _tezUiModelsDagInfo['default'].extend({
     needs: {
       am: {
         type: "dagAm",
@@ -7004,6 +7115,12 @@ define('tez-ui/models/dag', ['exports', 'ember', 'ember-data', 'tez-ui/models/am
           }
         },
         silent: true
+      },
+      info: {
+        type: "dagInfo",
+        idKey: "entityID",
+        loadType: "demand",
+        silent: true
       }
     },
 
@@ -7012,9 +7129,9 @@ define('tez-ui/models/dag', ['exports', 'ember', 'ember-data', 'tez-ui/models/am
     submitter: _emberData['default'].attr("string"),
 
     // Serialize when required
-    vertices: _emberData['default'].attr('object'),
-    edges: _emberData['default'].attr('object'),
-    vertexGroups: _emberData['default'].attr('object'),
+    vertices: _ember['default'].computed.or("dagPlan.vertices", "info.dagPlan.vertices"),
+    edges: _ember['default'].computed.or("dagPlan.edges", "info.dagPlan.edges"),
+    vertexGroups: _ember['default'].computed.or("dagPlan.vertexGroups", "info.dagPlan.vertexGroups"),
 
     domain: _emberData['default'].attr("string"),
     containerLogs: _emberData['default'].attr("object"),
@@ -7027,11 +7144,28 @@ define('tez-ui/models/dag', ['exports', 'ember', 'ember-data', 'tez-ui/models/am
     vertexNameIdMap: _emberData['default'].attr("object"),
 
     callerID: _emberData['default'].attr("string"),
-    callerContext: _emberData['default'].attr("string"),
-    callerDescription: _emberData['default'].attr("string"),
-    callerType: _emberData['default'].attr("string"),
+    callerContext: _ember['default'].computed.or("callerData.callerContext", "info.callerData.callerContext"),
+    callerDescription: _ember['default'].computed.or("callerData.callerDescription", "info.callerData.callerDescription"),
+    callerType: _ember['default'].computed.or("callerData.callerType", "info.callerData.callerType"),
 
-    amWsVersion: _emberData['default'].attr("string")
+    amWsVersion: _emberData['default'].attr("string"),
+    failedTaskAttempts: _emberData['default'].attr("number"),
+
+    finalStatus: _ember['default'].computed("status", "failedTaskAttempts", function () {
+      var status = this.get("status");
+      if (status === "SUCCEEDED" && this.get("failedTaskAttempts")) {
+        status = "SUCCEEDED_WITH_FAILURES";
+      }
+      return status;
+    }),
+
+    info: _emberData['default'].attr("object"),
+
+    counterGroupsHash: _ember['default'].computed("am.counterGroupsHash", "_counterGroups", "info.counterGroupsHash", function () {
+      var amCounters = this.get("am.counterGroupsHash"),
+          atsCounters = this.get("info.counterGroupsHash") || this._super();
+      return amCounters ? _ember['default'].$.extend({}, atsCounters, amCounters) : atsCounters;
+    })
   });
 });
 /**
@@ -7062,6 +7196,11 @@ define('tez-ui/models/hive-query', ['exports', 'ember', 'ember-data', 'tez-ui/mo
           return {
             callerId: model.get("entityID")
           };
+        },
+        loadType: function loadType(record) {
+          if (record.get("dagID")) {
+            return "demand";
+          }
         }
       }
     },
@@ -7070,6 +7209,8 @@ define('tez-ui/models/hive-query', ['exports', 'ember', 'ember-data', 'tez-ui/mo
 
     dag: _emberData['default'].attr('object'),
 
+    dagID: _emberData['default'].attr('string'),
+    appID: _emberData['default'].attr('string'),
     sessionID: _emberData['default'].attr('string'),
     operationID: _emberData['default'].attr('string'),
     llapAppID: _emberData['default'].attr('string'),
@@ -7387,11 +7528,14 @@ define('tez-ui/models/vertex-am', ['exports', 'ember-data', 'tez-ui/models/am'],
  */
 define('tez-ui/models/vertex', ['exports', 'ember', 'ember-data', 'tez-ui/models/am-timeline'], function (exports, _ember, _emberData, _tezUiModelsAmTimeline) {
 
-  function valueComputerFactory(path1, path2) {
+  function valueComputerFactory(path1, path2, path3) {
     return function () {
       var value = this.get(path1);
-      if (value === undefined || value === null) {
+      if (path2 && (value === undefined || value === null)) {
         value = this.get(path2);
+      }
+      if (path3 && (value === undefined || value === null)) {
+        value = this.get(path3);
       }
       return value;
     };
@@ -7433,7 +7577,7 @@ define('tez-ui/models/vertex', ['exports', 'ember', 'ember-data', 'tez-ui/models
     _lastTaskFinishTime: _emberData['default'].attr('number'),
 
     initTime: _ember['default'].computed("am.initTime", "_initTime", valueComputerFactory("am.initTime", "_initTime")),
-    startTime: _ember['default'].computed("am.startTime", "_startTime", valueComputerFactory("am.startTime", "_startTime")),
+    startTime: _ember['default'].computed("firstTaskStartTime", "am.startTime", "_startTime", valueComputerFactory("firstTaskStartTime", "am.startTime", "_startTime")),
     endTime: _ember['default'].computed("am.endTime", "_endTime", valueComputerFactory("am.endTime", "_endTime")),
     firstTaskStartTime: _ember['default'].computed("am.firstTaskStartTime", "_firstTaskStartTime", valueComputerFactory("am.firstTaskStartTime", "_firstTaskStartTime")),
     lastTaskFinishTime: _ember['default'].computed("am.lastTaskFinishTime", "_lastTaskFinishTime", valueComputerFactory("am.lastTaskFinishTime", "_lastTaskFinishTime")),
@@ -7526,8 +7670,7 @@ define('tez-ui/router', ['exports', 'ember', 'tez-ui/config/environment'], funct
 
   Router.map(function () {
     this.route('home', { path: '/' }, function () {
-      this.route('queries', { path: '/' });
-      this.route('index', { path: '/dags' });
+      this.route('queries');
     });
     this.route('dag', { path: '/dag/:dag_id' }, function () {
       this.route('vertices');
@@ -7632,7 +7775,7 @@ define('tez-ui/routes/abstract', ['exports', 'ember', 'ember-data', 'tez-ui/serv
     },
 
     setDocTitle: function setDocTitle() {
-      _ember['default'].$(document).attr('title', "Tez UI : " + this.get('title'));
+      _ember['default'].$(document).attr('title', this.get('title'));
     },
 
     setupController: function setupController(controller, model) {
@@ -7900,7 +8043,11 @@ define('tez-ui/routes/app', ['exports', 'tez-ui/routes/abstract', 'ember'], func
  */
 define('tez-ui/routes/app/configs', ['exports', 'ember', 'tez-ui/routes/single-am-pollster'], function (exports, _ember, _tezUiRoutesSingleAmPollster) {
   exports['default'] = _tezUiRoutesSingleAmPollster['default'].extend({
-    title: "Application Configurations",
+    title: _ember['default'].computed(function () {
+      var app = this.modelFor("app"),
+          entityID = app.get("entityID");
+      return 'Application Configuration: ' + entityID;
+    }).volatile(),
 
     loaderNamespace: "app",
 
@@ -7938,7 +8085,11 @@ define('tez-ui/routes/app/configs', ['exports', 'ember', 'tez-ui/routes/single-a
  */
 define('tez-ui/routes/app/dags', ['exports', 'ember', 'tez-ui/routes/multi-am-pollster'], function (exports, _ember, _tezUiRoutesMultiAmPollster) {
   exports['default'] = _tezUiRoutesMultiAmPollster['default'].extend({
-    title: "DAGs",
+    title: _ember['default'].computed(function () {
+      var app = this.modelFor("app"),
+          entityID = app.get("entityID");
+      return 'DAGs: ' + entityID;
+    }).volatile(),
 
     loaderNamespace: "app",
 
@@ -7973,7 +8124,11 @@ define('tez-ui/routes/app/dags', ['exports', 'ember', 'tez-ui/routes/multi-am-po
  */
 define('tez-ui/routes/app/index', ['exports', 'ember', 'tez-ui/routes/single-am-pollster', 'ember-data'], function (exports, _ember, _tezUiRoutesSingleAmPollster, _emberData) {
   exports['default'] = _tezUiRoutesSingleAmPollster['default'].extend({
-    title: "Application Details",
+    title: _ember['default'].computed(function () {
+      var app = this.modelFor("app"),
+          entityID = app.get("entityID");
+      return 'Application: ' + entityID;
+    }).volatile(),
 
     loaderNamespace: "app",
 
@@ -8154,7 +8309,11 @@ define("tez-ui/routes/attempt", ["exports", "tez-ui/routes/abstract"], function 
  */
 define('tez-ui/routes/attempt/counters', ['exports', 'ember', 'tez-ui/routes/single-am-pollster'], function (exports, _ember, _tezUiRoutesSingleAmPollster) {
   exports['default'] = _tezUiRoutesSingleAmPollster['default'].extend({
-    title: "DAG Details",
+    title: _ember['default'].computed(function () {
+      var attempt = this.modelFor("attempt"),
+          entityID = attempt.get("entityID");
+      return 'Task Attempt Counters: ' + entityID;
+    }).volatile(),
 
     loaderNamespace: "attempt",
 
@@ -8187,7 +8346,11 @@ define('tez-ui/routes/attempt/counters', ['exports', 'ember', 'tez-ui/routes/sin
  */
 define('tez-ui/routes/attempt/index', ['exports', 'ember', 'tez-ui/routes/single-am-pollster'], function (exports, _ember, _tezUiRoutesSingleAmPollster) {
   exports['default'] = _tezUiRoutesSingleAmPollster['default'].extend({
-    title: "DAG Details",
+    title: _ember['default'].computed(function () {
+      var attempt = this.modelFor("attempt"),
+          entityID = attempt.get("entityID");
+      return 'Task Attempt: ' + entityID;
+    }).volatile(),
 
     loaderNamespace: "attempt",
 
@@ -8256,7 +8419,12 @@ define("tez-ui/routes/dag", ["exports", "tez-ui/routes/abstract"], function (exp
  */
 define('tez-ui/routes/dag/attempts', ['exports', 'ember', 'tez-ui/routes/multi-am-pollster'], function (exports, _ember, _tezUiRoutesMultiAmPollster) {
   exports['default'] = _tezUiRoutesMultiAmPollster['default'].extend({
-    title: "All Task Attempts",
+    title: _ember['default'].computed(function () {
+      var dag = this.modelFor("dag"),
+          name = dag.get("name"),
+          entityID = dag.get("entityID");
+      return 'All Task Attempts: ' + name + ' (' + entityID + ')';
+    }).volatile(),
 
     loaderNamespace: "dag",
 
@@ -8291,7 +8459,12 @@ define('tez-ui/routes/dag/attempts', ['exports', 'ember', 'tez-ui/routes/multi-a
  */
 define('tez-ui/routes/dag/counters', ['exports', 'ember', 'tez-ui/routes/single-am-pollster'], function (exports, _ember, _tezUiRoutesSingleAmPollster) {
   exports['default'] = _tezUiRoutesSingleAmPollster['default'].extend({
-    title: "DAG Details",
+    title: _ember['default'].computed(function () {
+      var dag = this.modelFor("dag"),
+          name = dag.get("name"),
+          entityID = dag.get("entityID");
+      return 'DAG Counters: ' + name + ' (' + entityID + ')';
+    }).volatile(),
 
     loaderNamespace: "dag",
 
@@ -8301,6 +8474,9 @@ define('tez-ui/routes/dag/counters', ['exports', 'ember', 'tez-ui/routes/single-
     },
 
     load: function load(value, query, options) {
+      options = _ember['default'].$.extend({
+        demandNeeds: ["info"]
+      }, options);
       return this.get("loader").queryRecord('dag', this.modelFor("dag").get("id"), options);
     }
 
@@ -8325,7 +8501,12 @@ define('tez-ui/routes/dag/counters', ['exports', 'ember', 'tez-ui/routes/single-
  */
 define('tez-ui/routes/dag/graphical', ['exports', 'ember', 'tez-ui/routes/multi-am-pollster'], function (exports, _ember, _tezUiRoutesMultiAmPollster) {
   exports['default'] = _tezUiRoutesMultiAmPollster['default'].extend({
-    title: "Graphical View",
+    title: _ember['default'].computed(function () {
+      var dag = this.modelFor("dag"),
+          name = dag.get("name"),
+          entityID = dag.get("entityID");
+      return 'Graphical View: ' + name + ' (' + entityID + ')';
+    }).volatile(),
 
     loaderNamespace: "dag",
 
@@ -8335,6 +8516,9 @@ define('tez-ui/routes/dag/graphical', ['exports', 'ember', 'tez-ui/routes/multi-
     },
 
     load: function load(value, query, options) {
+      options = _ember['default'].$.extend({
+        demandNeeds: ["info", "dag"]
+      }, options);
       return this.get("loader").query('vertex', {
         dagID: this.modelFor("dag").get("id")
       }, options);
@@ -8401,7 +8585,12 @@ define('tez-ui/routes/dag/graphical', ['exports', 'ember', 'tez-ui/routes/multi-
  */
 define('tez-ui/routes/dag/index', ['exports', 'ember', 'tez-ui/routes/single-am-pollster', 'tez-ui/utils/download-dag-zip'], function (exports, _ember, _tezUiRoutesSingleAmPollster, _tezUiUtilsDownloadDagZip) {
   exports['default'] = _tezUiRoutesSingleAmPollster['default'].extend({
-    title: "DAG Details",
+    title: _ember['default'].computed(function () {
+      var dag = this.modelFor("dag"),
+          name = dag.get("name"),
+          entityID = dag.get("entityID");
+      return 'DAG: ' + name + ' (' + entityID + ')';
+    }).volatile(),
 
     loaderNamespace: "dag",
 
@@ -8411,6 +8600,9 @@ define('tez-ui/routes/dag/index', ['exports', 'ember', 'tez-ui/routes/single-am-
     },
 
     load: function load(value, query, options) {
+      options = _ember['default'].$.extend({
+        demandNeeds: ["info"]
+      }, options);
       return this.get("loader").queryRecord('dag', this.modelFor("dag").get("id"), options);
     },
 
@@ -8475,7 +8667,12 @@ define('tez-ui/routes/dag/index', ['exports', 'ember', 'tez-ui/routes/single-am-
  */
 define('tez-ui/routes/dag/index/index', ['exports', 'ember', 'tez-ui/routes/multi-am-pollster'], function (exports, _ember, _tezUiRoutesMultiAmPollster) {
   exports['default'] = _tezUiRoutesMultiAmPollster['default'].extend({
-    title: "DAG Details",
+    title: _ember['default'].computed(function () {
+      var dag = this.modelFor("dag"),
+          name = dag.get("name"),
+          entityID = dag.get("entityID");
+      return 'DAG: ' + name + ' (' + entityID + ')';
+    }).volatile(),
 
     loaderNamespace: "dag",
 
@@ -8534,7 +8731,12 @@ define('tez-ui/routes/dag/index/index', ['exports', 'ember', 'tez-ui/routes/mult
  */
 define('tez-ui/routes/dag/swimlane', ['exports', 'ember', 'tez-ui/routes/multi-am-pollster'], function (exports, _ember, _tezUiRoutesMultiAmPollster) {
   exports['default'] = _tezUiRoutesMultiAmPollster['default'].extend({
-    title: "Vertex Swimlane",
+    title: _ember['default'].computed(function () {
+      var dag = this.modelFor("dag"),
+          name = dag.get("name"),
+          entityID = dag.get("entityID");
+      return 'Vertex Swimlane: ' + name + ' (' + entityID + ')';
+    }).volatile(),
 
     loaderNamespace: "dag",
 
@@ -8544,6 +8746,9 @@ define('tez-ui/routes/dag/swimlane', ['exports', 'ember', 'tez-ui/routes/multi-a
     },
 
     load: function load(value, query, options) {
+      options = _ember['default'].$.extend({
+        demandNeeds: ["info", "dag"]
+      }, options);
       return this.get("loader").query('vertex', {
         dagID: this.modelFor("dag").get("id")
       }, options);
@@ -8583,7 +8788,12 @@ define('tez-ui/routes/dag/swimlane', ['exports', 'ember', 'tez-ui/routes/multi-a
  */
 define('tez-ui/routes/dag/tasks', ['exports', 'ember', 'tez-ui/routes/multi-am-pollster', 'tez-ui/utils/virtual-anchor'], function (exports, _ember, _tezUiRoutesMultiAmPollster, _tezUiUtilsVirtualAnchor) {
   exports['default'] = _tezUiRoutesMultiAmPollster['default'].extend({
-    title: "All Tasks",
+    title: _ember['default'].computed(function () {
+      var dag = this.modelFor("dag"),
+          name = dag.get("name"),
+          entityID = dag.get("entityID");
+      return 'All Tasks: ' + name + ' (' + entityID + ')';
+    }).volatile(),
 
     loaderNamespace: "dag",
 
@@ -8635,7 +8845,12 @@ define('tez-ui/routes/dag/tasks', ['exports', 'ember', 'tez-ui/routes/multi-am-p
  */
 define('tez-ui/routes/dag/vertices', ['exports', 'ember', 'tez-ui/routes/multi-am-pollster'], function (exports, _ember, _tezUiRoutesMultiAmPollster) {
   exports['default'] = _tezUiRoutesMultiAmPollster['default'].extend({
-    title: "All Vertices",
+    title: _ember['default'].computed(function () {
+      var dag = this.modelFor("dag"),
+          name = dag.get("name"),
+          entityID = dag.get("entityID");
+      return 'All Vertices: ' + name + ' (' + entityID + ')';
+    }).volatile(),
 
     loaderNamespace: "dag",
 
@@ -8730,6 +8945,8 @@ define('tez-ui/routes/home/index', ['exports', 'ember', 'tez-ui/routes/server-si
     entityType: "dag",
     loaderNamespace: "dags",
 
+    visibleRecords: [],
+
     setupController: function setupController(controller, model) {
       this._super(controller, model);
       _ember['default'].run.later(this, "startCrumbBubble");
@@ -8781,6 +8998,22 @@ define('tez-ui/routes/home/index', ['exports', 'ember', 'tez-ui/routes/server-si
         loader.unloadAll("dag");
         loader.unloadAll("ahs-app");
         this._super();
+      },
+
+      loadCounters: function loadCounters() {
+        var visibleRecords = this.get("visibleRecords").slice(),
+            loader = this.get("loader");
+
+        function loadInfoOfNextDAG() {
+          if (visibleRecords.length) {
+            loader.loadNeed(visibleRecords.shift(), "info")['finally'](loadInfoOfNextDAG);
+          }
+        }
+
+        loadInfoOfNextDAG();
+      },
+      tableRowsChanged: function tableRowsChanged(records) {
+        this.set("visibleRecords", records);
       }
     }
   });
@@ -8826,8 +9059,8 @@ define('tez-ui/routes/home/queries', ['exports', 'ember', 'tez-ui/routes/server-
 
     loaderQueryParams: {
       id: "queryID",
-      dagID: "dagID",
-      appID: "appID",
+      DAG_ID: "dagID",
+      APP_ID: "appID",
       executionMode: "executionMode",
       user: "user",
       requestuser: "requestUser",
@@ -8843,35 +9076,6 @@ define('tez-ui/routes/home/queries', ['exports', 'ember', 'tez-ui/routes/server-
     loaderNamespace: "queries",
 
     fromId: null,
-
-    load: function load(value, query, options) {
-      var that = this;
-
-      if (query.dagID) {
-        return that.get("loader").queryRecord("dag", query.dagID).then(function (dag) {
-          return that.load(value, {
-            id: dag.get("callerID")
-          }, options);
-        }, function () {
-          return [];
-        });
-      } else if (query.appID) {
-        return that.get("loader").query("dag", {
-          appID: query.appID,
-          limit: query.limit
-        }).then(function (dags) {
-          return _ember['default'].RSVP.all(dags.map(function (dag) {
-            return that.get("loader").queryRecord("hive-query", dag.get("callerID"), options);
-          }));
-        }, function () {
-          return [];
-        });
-      }
-
-      return this._super(value, query, options).then(function (records) {
-        return records.toArray();
-      });
-    },
 
     setupController: function setupController(controller, model) {
       this._super(controller, model);
@@ -9254,10 +9458,13 @@ define('tez-ui/routes/server-side-ops', ['exports', 'ember', 'tez-ui/routes/abst
 define('tez-ui/routes/single-am-pollster', ['exports', 'ember', 'tez-ui/routes/am-pollster'], function (exports, _ember, _tezUiRoutesAmPollster) {
   exports['default'] = _tezUiRoutesAmPollster['default'].extend({
 
-    canPoll: _ember['default'].computed("polledRecords", "loadedValue.dag.isComplete", "loadedValue.app.isComplete", function () {
+    canPoll: _ember['default'].computed("polledRecords", "loadedValue.dag.isComplete", "loadedValue.isComplete", "loadedValue.app.isComplete", function () {
       var isComplete = this.get("loadedValue.dag.isComplete");
       if (isComplete === undefined) {
-        isComplete = this.get("loadedValue.app.isComplete");
+        isComplete = this.get("loadedValue.isComplete");
+        if (isComplete === undefined) {
+          isComplete = this.get("loadedValue.app.isComplete");
+        }
       }
       return isComplete === false && this._super();
     }),
@@ -9324,7 +9531,11 @@ define("tez-ui/routes/task", ["exports", "tez-ui/routes/abstract"], function (ex
  */
 define('tez-ui/routes/task/attempts', ['exports', 'ember', 'tez-ui/routes/multi-am-pollster'], function (exports, _ember, _tezUiRoutesMultiAmPollster) {
   exports['default'] = _tezUiRoutesMultiAmPollster['default'].extend({
-    title: "Task Attempts",
+    title: _ember['default'].computed(function () {
+      var task = this.modelFor("task"),
+          entityID = task.get("entityID");
+      return 'Task Attempts: ' + entityID;
+    }).volatile(),
 
     loaderNamespace: "task",
 
@@ -9359,7 +9570,11 @@ define('tez-ui/routes/task/attempts', ['exports', 'ember', 'tez-ui/routes/multi-
  */
 define('tez-ui/routes/task/counters', ['exports', 'ember', 'tez-ui/routes/single-am-pollster'], function (exports, _ember, _tezUiRoutesSingleAmPollster) {
   exports['default'] = _tezUiRoutesSingleAmPollster['default'].extend({
-    title: "DAG Details",
+    title: _ember['default'].computed(function () {
+      var task = this.modelFor("task"),
+          entityID = task.get("entityID");
+      return 'Task Counters: ' + entityID;
+    }).volatile(),
 
     loaderNamespace: "task",
 
@@ -9392,7 +9607,11 @@ define('tez-ui/routes/task/counters', ['exports', 'ember', 'tez-ui/routes/single
  */
 define('tez-ui/routes/task/index', ['exports', 'ember', 'tez-ui/routes/single-am-pollster'], function (exports, _ember, _tezUiRoutesSingleAmPollster) {
   exports['default'] = _tezUiRoutesSingleAmPollster['default'].extend({
-    title: "DAG Details",
+    title: _ember['default'].computed(function () {
+      var task = this.modelFor("task"),
+          entityID = task.get("entityID");
+      return 'Task: ' + entityID;
+    }).volatile(),
 
     loaderNamespace: "task",
 
@@ -9473,7 +9692,12 @@ define("tez-ui/routes/vertex", ["exports", "tez-ui/routes/abstract"], function (
  */
 define('tez-ui/routes/vertex/attempts', ['exports', 'ember', 'tez-ui/routes/multi-am-pollster'], function (exports, _ember, _tezUiRoutesMultiAmPollster) {
   exports['default'] = _tezUiRoutesMultiAmPollster['default'].extend({
-    title: "Task Attempts",
+    title: _ember['default'].computed(function () {
+      var vertex = this.modelFor("vertex"),
+          name = vertex.get("name"),
+          entityID = vertex.get("entityID");
+      return 'Vertex Task Attempts: ' + name + ' (' + entityID + ')';
+    }).volatile(),
 
     loaderNamespace: "vertex",
 
@@ -9508,7 +9732,12 @@ define('tez-ui/routes/vertex/attempts', ['exports', 'ember', 'tez-ui/routes/mult
  */
 define('tez-ui/routes/vertex/configs', ['exports', 'ember', 'tez-ui/routes/single-am-pollster'], function (exports, _ember, _tezUiRoutesSingleAmPollster) {
   exports['default'] = _tezUiRoutesSingleAmPollster['default'].extend({
-    title: "Vertex Configurations",
+    title: _ember['default'].computed(function () {
+      var vertex = this.modelFor("vertex"),
+          name = vertex.get("name"),
+          entityID = vertex.get("entityID");
+      return 'Vertex Configurations: ' + name + ' (' + entityID + ')';
+    }).volatile(),
 
     loaderNamespace: "vertex",
 
@@ -9543,7 +9772,12 @@ define('tez-ui/routes/vertex/configs', ['exports', 'ember', 'tez-ui/routes/singl
  */
 define('tez-ui/routes/vertex/counters', ['exports', 'ember', 'tez-ui/routes/single-am-pollster'], function (exports, _ember, _tezUiRoutesSingleAmPollster) {
   exports['default'] = _tezUiRoutesSingleAmPollster['default'].extend({
-    title: "DAG Details",
+    title: _ember['default'].computed(function () {
+      var vertex = this.modelFor("vertex"),
+          name = vertex.get("name"),
+          entityID = vertex.get("entityID");
+      return 'Vertex Counters: ' + name + ' (' + entityID + ')';
+    }).volatile(),
 
     loaderNamespace: "vertex",
 
@@ -9576,7 +9810,12 @@ define('tez-ui/routes/vertex/counters', ['exports', 'ember', 'tez-ui/routes/sing
  */
 define('tez-ui/routes/vertex/index', ['exports', 'ember', 'tez-ui/routes/single-am-pollster'], function (exports, _ember, _tezUiRoutesSingleAmPollster) {
   exports['default'] = _tezUiRoutesSingleAmPollster['default'].extend({
-    title: "DAG Details",
+    title: _ember['default'].computed(function () {
+      var vertex = this.modelFor("vertex"),
+          name = vertex.get("name"),
+          entityID = vertex.get("entityID");
+      return 'Vertex: ' + name + ' (' + entityID + ')';
+    }).volatile(),
 
     loaderNamespace: "vertex",
 
@@ -9609,7 +9848,12 @@ define('tez-ui/routes/vertex/index', ['exports', 'ember', 'tez-ui/routes/single-
  */
 define('tez-ui/routes/vertex/tasks', ['exports', 'ember', 'tez-ui/routes/multi-am-pollster', 'tez-ui/utils/virtual-anchor'], function (exports, _ember, _tezUiRoutesMultiAmPollster, _tezUiUtilsVirtualAnchor) {
   exports['default'] = _tezUiRoutesMultiAmPollster['default'].extend({
-    title: "All Tasks",
+    title: _ember['default'].computed(function () {
+      var vertex = this.modelFor("vertex"),
+          name = vertex.get("name"),
+          entityID = vertex.get("entityID");
+      return 'Vertex Tasks: ' + name + ' (' + entityID + ')';
+    }).volatile(),
 
     loaderNamespace: "vertex",
 
@@ -9900,7 +10144,64 @@ define('tez-ui/serializers/dag-am', ['exports', 'tez-ui/serializers/am'], functi
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-define('tez-ui/serializers/dag', ['exports', 'ember', 'tez-ui/serializers/timeline'], function (exports, _ember, _tezUiSerializersTimeline) {
+define('tez-ui/serializers/dag-info', ['exports', 'ember', 'tez-ui/serializers/timeline'], function (exports, _ember, _tezUiSerializersTimeline) {
+  exports['default'] = _tezUiSerializersTimeline['default'].extend({
+    maps: {
+      dagPlan: 'otherinfo.dagPlan',
+      callerData: 'callerData'
+    },
+
+    normalizeResourceHash: function normalizeResourceHash(resourceHash) {
+      var data = resourceHash.data,
+          callerData = {},
+          dagInfo = _ember['default'].get(data, "otherinfo.dagPlan.dagInfo"),
+          // New style, from TEZ-2851
+      dagContext = _ember['default'].get(data, "otherinfo.dagPlan.dagContext"); // Old style
+
+      if (dagContext) {
+        callerData.callerContext = _ember['default'].String.classify((_ember['default'].get(dagContext, "context") || "").toLowerCase());
+        callerData.callerDescription = _ember['default'].get(dagContext, "description");
+        callerData.callerType = _ember['default'].get(dagContext, "callerType") || _ember['default'].get(data, "otherinfo.callerType");
+      } else if (dagInfo) {
+        var infoObj = {};
+        try {
+          infoObj = JSON.parse(dagInfo);
+        } catch (e) {
+          infoObj = dagInfo;
+        }
+
+        callerData.callerContext = _ember['default'].get(infoObj, "context") || _ember['default'].get(data, "otherinfo.callerContext");
+        callerData.callerDescription = _ember['default'].get(infoObj, "description") || _ember['default'].get(dagInfo, "blob") || dagInfo;
+      }
+
+      data.callerData = callerData;
+
+      return resourceHash;
+    },
+
+    extractAttributes: function extractAttributes(modelClass, resourceHash) {
+      return this._super(modelClass, this.normalizeResourceHash(resourceHash));
+    }
+  });
+});
+/**
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+define('tez-ui/serializers/dag', ['exports', 'ember', 'tez-ui/serializers/dag-info'], function (exports, _ember, _tezUiSerializersDagInfo) {
 
   var MoreObject = more.Object;
 
@@ -9983,11 +10284,13 @@ define('tez-ui/serializers/dag', ['exports', 'ember', 'tez-ui/serializers/timeli
     return idNameMap;
   }
 
-  exports['default'] = _tezUiSerializersTimeline['default'].extend({
+  exports['default'] = _tezUiSerializersDagInfo['default'].extend({
     maps: {
       name: 'primaryfilters.dagName.0',
 
       submitter: 'primaryfilters.user.0',
+
+      callerID: 'primaryfilters.callerId.0',
 
       atsStatus: getStatus,
       // progress
@@ -9995,10 +10298,6 @@ define('tez-ui/serializers/dag', ['exports', 'ember', 'tez-ui/serializers/timeli
       startTime: getStartTime,
       endTime: getEndTime,
       // duration
-
-      vertices: 'otherinfo.dagPlan.vertices',
-      edges: 'otherinfo.dagPlan.edges',
-      vertexGroups: 'otherinfo.dagPlan.vertexGroups',
 
       // appID
       domain: 'domain',
@@ -10010,43 +10309,9 @@ define('tez-ui/serializers/dag', ['exports', 'ember', 'tez-ui/serializers/timeli
       vertexIdNameMap: getIdNameMap,
       vertexNameIdMap: 'otherinfo.vertexNameIdMapping',
 
-      callerID: 'primaryfilters.callerId.0',
-      callerContext: 'callerContext',
-      callerDescription: 'callerDescription',
-      callerType: 'callerType',
-
-      amWsVersion: 'otherinfo.amWebServiceVersion'
-    },
-
-    normalizeResourceHash: function normalizeResourceHash(resourceHash) {
-      var data = resourceHash.data,
-          dagInfo = _ember['default'].get(resourceHash, "data.otherinfo.dagPlan.dagInfo"),
-          // New style, from TEZ-2851
-      dagContext = _ember['default'].get(resourceHash, "data.otherinfo.dagPlan.dagContext"); // Old style
-
-      if (dagContext) {
-        data.callerContext = _ember['default'].String.classify((_ember['default'].get(dagContext, "context") || "").toLowerCase());
-        data.callerDescription = _ember['default'].get(dagContext, "description");
-        data.callerType = _ember['default'].get(dagContext, "callerType");
-      } else if (dagInfo) {
-        var infoObj = {};
-        try {
-          infoObj = JSON.parse(dagInfo);
-        } catch (e) {
-          infoObj = dagInfo;
-        }
-
-        data.callerContext = _ember['default'].get(infoObj, "context");
-        data.callerDescription = _ember['default'].get(infoObj, "description") || _ember['default'].get(dagInfo, "blob") || dagInfo;
-      }
-
-      return resourceHash;
-    },
-
-    extractAttributes: function extractAttributes(modelClass, resourceHash) {
-      return this._super(modelClass, this.normalizeResourceHash(resourceHash));
+      amWsVersion: 'otherinfo.amWebServiceVersion',
+      failedTaskAttempts: 'otherinfo.numFailedTaskAttempts'
     }
-
   });
 });
 /*global more*/
@@ -10100,6 +10365,8 @@ define('tez-ui/serializers/hive-query', ['exports', 'ember', 'tez-ui/serializers
     maps: {
       queryText: 'otherinfo.QUERY.queryText',
 
+      dagID: 'primaryfilters.DAG_ID',
+      appID: 'primaryfilters.APP_ID',
       sessionID: 'otherinfo.INVOKER_INFO',
       operationID: 'primaryfilters.operationid.0',
       llapAppID: 'otherinfo.LLAP_APP_ID',
@@ -10332,7 +10599,7 @@ define('tez-ui/serializers/task', ['exports', 'tez-ui/serializers/timeline'], fu
       failedTaskAttempts: 'otherinfo.numFailedTaskAttempts',
 
       successfulAttemptID: 'otherinfo.successfulAttemptId',
-      attemptIDs: 'otherinfo.relatedentities.TEZ_TASK_ATTEMPT_ID'
+      attemptIDs: 'relatedentities.TEZ_TASK_ATTEMPT_ID'
     }
   });
 });
@@ -10573,25 +10840,18 @@ define("tez-ui/services/hosts", ["exports", "ember"], function (exports, _ember)
     env: _ember["default"].inject.service("env"),
 
     correctProtocol: function correctProtocol(url, localProto) {
-      var urlProto;
-
-      localProto = localProto || window.location.protocol;
-
-      if (url.match("://")) {
-        urlProto = url.substr(0, url.indexOf("//"));
+      var index = url.indexOf("://");
+      if (index === -1) {
+        localProto = localProto || window.location.protocol;
+        return localProto + "//" + url;
       }
-
-      if (localProto === "file:") {
-        urlProto = urlProto || "http:";
-      } else {
-        urlProto = localProto;
+      var urlProto = url.substr(0, index + 1);
+      if (urlProto === "file:") {
+        urlProto = localProto || "http:";
+        url = url.substr(index + 3);
+        return urlProto + "//" + url;
       }
-
-      if (url.match("://")) {
-        url = url.substr(url.indexOf("://") + 3);
-      }
-
-      return urlProto + "//" + url;
+      return url;
     },
 
     normalizeURL: function normalizeURL(url) {
@@ -12426,7 +12686,7 @@ define("tez-ui/templates/application", ["exports"], function (exports) {
         morphs[9] = dom.createMorphAt(fragment, 5, 5, contextualElement);
         return morphs;
       },
-      statements: [["attribute", "class", ["concat", [["subexpr", "if", [["get", "env.app.isStandalone", ["loc", [null, [19, 17], [19, 37]]]], "standalone", "wrapped"], [], ["loc", [null, [19, 12], [19, 62]]]], " ", ["subexpr", "if", [["get", "env.ENV.isIE", ["loc", [null, [19, 68], [19, 80]]]], "ie"], [], ["loc", [null, [19, 63], [19, 87]]]]]]], ["block", "link-to", ["home.queries"], ["class", "logo"], 0, null, ["loc", [null, [24, 8], [26, 20]]]], ["inline", "em-breadcrumbs", [], ["items", ["subexpr", "@mut", [["get", "prefixedBreadcrumbs", ["loc", [null, [29, 33], [29, 52]]]]], [], []]], ["loc", [null, [29, 10], [29, 54]]]], ["block", "if", [["get", "env.app.buildVersion", ["loc", [null, [33, 16], [33, 36]]]]], [], 1, null, ["loc", [null, [33, 10], [35, 17]]]], ["attribute", "href", ["get", "env.app.hrefs.help", ["loc", [null, [37, 22], [37, 40]]]]], ["content", "outlet", ["loc", [null, [46, 6], [46, 16]]]], ["attribute", "href", ["get", "env.app.hrefs.license", ["loc", [null, [53, 16], [53, 37]]]]], ["block", "if", [["get", "env.app.timezone", ["loc", [null, [57, 14], [57, 30]]]]], [], 2, null, ["loc", [null, [57, 8], [59, 15]]]], ["inline", "outlet", ["modal"], [], ["loc", [null, [65, 0], [65, 18]]]], ["inline", "error-bar", [], ["error", ["subexpr", "@mut", [["get", "appError", ["loc", [null, [67, 18], [67, 26]]]]], [], []]], ["loc", [null, [67, 0], [67, 28]]]]],
+      statements: [["attribute", "class", ["concat", [["subexpr", "if", [["get", "env.app.isStandalone", ["loc", [null, [19, 17], [19, 37]]]], "standalone", "wrapped"], [], ["loc", [null, [19, 12], [19, 62]]]], " ", ["subexpr", "if", [["get", "env.ENV.isIE", ["loc", [null, [19, 68], [19, 80]]]], "ie"], [], ["loc", [null, [19, 63], [19, 87]]]]]]], ["block", "link-to", ["application"], ["class", "logo"], 0, null, ["loc", [null, [24, 8], [26, 20]]]], ["inline", "em-breadcrumbs", [], ["items", ["subexpr", "@mut", [["get", "prefixedBreadcrumbs", ["loc", [null, [29, 33], [29, 52]]]]], [], []]], ["loc", [null, [29, 10], [29, 54]]]], ["block", "if", [["get", "env.app.buildVersion", ["loc", [null, [33, 16], [33, 36]]]]], [], 1, null, ["loc", [null, [33, 10], [35, 17]]]], ["attribute", "href", ["get", "env.app.hrefs.help", ["loc", [null, [37, 22], [37, 40]]]]], ["content", "outlet", ["loc", [null, [46, 6], [46, 16]]]], ["attribute", "href", ["get", "env.app.hrefs.license", ["loc", [null, [53, 16], [53, 37]]]]], ["block", "if", [["get", "env.app.timezone", ["loc", [null, [57, 14], [57, 30]]]]], [], 2, null, ["loc", [null, [57, 8], [59, 15]]]], ["inline", "outlet", ["modal"], [], ["loc", [null, [65, 0], [65, 18]]]], ["inline", "error-bar", [], ["error", ["subexpr", "@mut", [["get", "appError", ["loc", [null, [67, 18], [67, 26]]]]], [], []]], ["loc", [null, [67, 0], [67, 28]]]]],
       locals: [],
       templates: [child0, child1, child2]
     };
@@ -15354,7 +15614,7 @@ define("tez-ui/templates/components/dags-page-search", ["exports"], function (ex
             "column": 0
           },
           "end": {
-            "line": 86,
+            "line": 87,
             "column": 0
           }
         },
@@ -15471,6 +15731,13 @@ define("tez-ui/templates/components/dags-page-search", ["exports"], function (ex
         var el4 = dom.createTextNode("\n      ");
         dom.appendChild(el3, el4);
         var el4 = dom.createElement("option");
+        dom.setAttribute(el4, "value", "KILLED");
+        var el5 = dom.createTextNode("Killed");
+        dom.appendChild(el4, el5);
+        dom.appendChild(el3, el4);
+        var el4 = dom.createTextNode("\n      ");
+        dom.appendChild(el3, el4);
+        var el4 = dom.createElement("option");
         dom.setAttribute(el4, "value", "ERROR");
         var el5 = dom.createTextNode("Error");
         dom.appendChild(el4, el5);
@@ -15567,7 +15834,7 @@ define("tez-ui/templates/components/dags-page-search", ["exports"], function (ex
         morphs[9] = dom.createElementMorph(element2);
         return morphs;
       },
-      statements: [["inline", "input", [], ["value", ["subexpr", "@mut", [["get", "dagName", ["loc", [null, [22, 18], [22, 25]]]]], [], []], "type", "text", "class", "form-control input-sm", "placeholder", "Search...", "enter", "search"], ["loc", [null, [22, 4], [27, 6]]]], ["inline", "input", [], ["value", ["subexpr", "@mut", [["get", "dagID", ["loc", [null, [30, 18], [30, 23]]]]], [], []], "type", "text", "class", "form-control input-sm", "placeholder", "Search...", "enter", "search"], ["loc", [null, [30, 4], [35, 6]]]], ["inline", "input", [], ["value", ["subexpr", "@mut", [["get", "submitter", ["loc", [null, [38, 18], [38, 27]]]]], [], []], "type", "text", "class", "form-control input-sm", "placeholder", "Search...", "enter", "search"], ["loc", [null, [38, 4], [43, 6]]]], ["attribute", "value", ["get", "status", ["loc", [null, [46, 20], [46, 26]]]]], ["attribute", "onchange", ["subexpr", "action", ["statusChanged"], ["value", "target.value"], ["loc", [null, [48, 17], [48, 64]]]]], ["element", "action", ["statusKeyPress"], ["on", "keyPress"], ["loc", [null, [49, 8], [49, 49]]]], ["inline", "input", [], ["value", ["subexpr", "@mut", [["get", "appID", ["loc", [null, [59, 18], [59, 23]]]]], [], []], "type", "text", "class", "form-control input-sm", "placeholder", "Search...", "enter", "search"], ["loc", [null, [59, 4], [64, 6]]]], ["inline", "input", [], ["value", ["subexpr", "@mut", [["get", "queue", ["loc", [null, [67, 18], [67, 23]]]]], [], []], "type", "text", "class", "form-control input-sm", "placeholder", "Search...", "enter", "search"], ["loc", [null, [67, 4], [72, 6]]]], ["inline", "input", [], ["value", ["subexpr", "@mut", [["get", "callerID", ["loc", [null, [75, 18], [75, 26]]]]], [], []], "type", "text", "class", "form-control input-sm", "placeholder", "Search...", "enter", "search"], ["loc", [null, [75, 4], [80, 6]]]], ["element", "action", ["search"], [], ["loc", [null, [83, 46], [83, 65]]]]],
+      statements: [["inline", "input", [], ["value", ["subexpr", "@mut", [["get", "dagName", ["loc", [null, [22, 18], [22, 25]]]]], [], []], "type", "text", "class", "form-control input-sm", "placeholder", "Search...", "enter", "search"], ["loc", [null, [22, 4], [27, 6]]]], ["inline", "input", [], ["value", ["subexpr", "@mut", [["get", "dagID", ["loc", [null, [30, 18], [30, 23]]]]], [], []], "type", "text", "class", "form-control input-sm", "placeholder", "Search...", "enter", "search"], ["loc", [null, [30, 4], [35, 6]]]], ["inline", "input", [], ["value", ["subexpr", "@mut", [["get", "submitter", ["loc", [null, [38, 18], [38, 27]]]]], [], []], "type", "text", "class", "form-control input-sm", "placeholder", "Search...", "enter", "search"], ["loc", [null, [38, 4], [43, 6]]]], ["attribute", "value", ["get", "status", ["loc", [null, [46, 20], [46, 26]]]]], ["attribute", "onchange", ["subexpr", "action", ["statusChanged"], ["value", "target.value"], ["loc", [null, [48, 17], [48, 64]]]]], ["element", "action", ["statusKeyPress"], ["on", "keyPress"], ["loc", [null, [49, 8], [49, 49]]]], ["inline", "input", [], ["value", ["subexpr", "@mut", [["get", "appID", ["loc", [null, [60, 18], [60, 23]]]]], [], []], "type", "text", "class", "form-control input-sm", "placeholder", "Search...", "enter", "search"], ["loc", [null, [60, 4], [65, 6]]]], ["inline", "input", [], ["value", ["subexpr", "@mut", [["get", "queue", ["loc", [null, [68, 18], [68, 23]]]]], [], []], "type", "text", "class", "form-control input-sm", "placeholder", "Search...", "enter", "search"], ["loc", [null, [68, 4], [73, 6]]]], ["inline", "input", [], ["value", ["subexpr", "@mut", [["get", "callerID", ["loc", [null, [76, 18], [76, 26]]]]], [], []], "type", "text", "class", "form-control input-sm", "placeholder", "Search...", "enter", "search"], ["loc", [null, [76, 4], [81, 6]]]], ["element", "action", ["search"], [], ["loc", [null, [84, 46], [84, 65]]]]],
       locals: [],
       templates: []
     };
@@ -19219,6 +19486,59 @@ define("tez-ui/templates/components/form-element/vertical/textarea", ["exports"]
     };
   })());
 });
+define("tez-ui/templates/components/home-table-controls", ["exports"], function (exports) {
+  exports["default"] = Ember.HTMLBars.template((function () {
+    return {
+      meta: {
+        "fragmentReason": {
+          "name": "modifiers",
+          "modifiers": ["action"]
+        },
+        "revision": "Ember@2.2.0",
+        "loc": {
+          "source": null,
+          "start": {
+            "line": 1,
+            "column": 0
+          },
+          "end": {
+            "line": 25,
+            "column": 0
+          }
+        },
+        "moduleName": "tez-ui/templates/components/home-table-controls.hbs"
+      },
+      isEmpty: false,
+      arity: 0,
+      cachedFragment: null,
+      hasRendered: false,
+      buildFragment: function buildFragment(dom) {
+        var el0 = dom.createDocumentFragment();
+        var el1 = dom.createTextNode("\n");
+        dom.appendChild(el0, el1);
+        var el1 = dom.createElement("button");
+        dom.setAttribute(el1, "type", "button");
+        dom.setAttribute(el1, "title", "Load counter values for all the above rows. Please note that loading counters is a costly operation.");
+        var el2 = dom.createTextNode("\n  Load Counters\n");
+        dom.appendChild(el1, el2);
+        dom.appendChild(el0, el1);
+        var el1 = dom.createTextNode("\n");
+        dom.appendChild(el0, el1);
+        return el0;
+      },
+      buildRenderNodes: function buildRenderNodes(dom, fragment, contextualElement) {
+        var element0 = dom.childAt(fragment, [1]);
+        var morphs = new Array(2);
+        morphs[0] = dom.createAttrMorph(element0, 'class');
+        morphs[1] = dom.createElementMorph(element0);
+        return morphs;
+      },
+      statements: [["attribute", "class", ["concat", ["btn btn-success ", ["subexpr", "if", [["get", "countersLoaded", ["loc", [null, [20, 36], [20, 50]]]], "no-visible"], [], ["loc", [null, [20, 31], [20, 65]]]]]]], ["element", "action", ["loadCounters"], [], ["loc", [null, [21, 8], [21, 33]]]]],
+      locals: [],
+      templates: []
+    };
+  })());
+});
 define("tez-ui/templates/components/pagination-ui", ["exports"], function (exports) {
   exports["default"] = Ember.HTMLBars.template((function () {
     var child0 = (function () {
@@ -20458,6 +20778,48 @@ define("tez-ui/templates/components/stats-link", ["exports"], function (exports)
   exports["default"] = Ember.HTMLBars.template((function () {
     var child0 = (function () {
       var child0 = (function () {
+        var child0 = (function () {
+          return {
+            meta: {
+              "fragmentReason": false,
+              "revision": "Ember@2.2.0",
+              "loc": {
+                "source": null,
+                "start": {
+                  "line": 21,
+                  "column": 4
+                },
+                "end": {
+                  "line": 23,
+                  "column": 4
+                }
+              },
+              "moduleName": "tez-ui/templates/components/stats-link.hbs"
+            },
+            isEmpty: false,
+            arity: 0,
+            cachedFragment: null,
+            hasRendered: false,
+            buildFragment: function buildFragment(dom) {
+              var el0 = dom.createDocumentFragment();
+              var el1 = dom.createTextNode("      ");
+              dom.appendChild(el0, el1);
+              var el1 = dom.createComment("");
+              dom.appendChild(el0, el1);
+              var el1 = dom.createTextNode("\n");
+              dom.appendChild(el0, el1);
+              return el0;
+            },
+            buildRenderNodes: function buildRenderNodes(dom, fragment, contextualElement) {
+              var morphs = new Array(1);
+              morphs[0] = dom.createMorphAt(fragment, 1, 1, contextualElement);
+              return morphs;
+            },
+            statements: [["inline", "txt", [["get", "value", ["loc", [null, [22, 12], [22, 17]]]]], ["type", "number"], ["loc", [null, [22, 6], [22, 33]]]]],
+            locals: [],
+            templates: []
+          };
+        })();
         return {
           meta: {
             "fragmentReason": false,
@@ -20469,7 +20831,7 @@ define("tez-ui/templates/components/stats-link", ["exports"], function (exports)
                 "column": 2
               },
               "end": {
-                "line": 22,
+                "line": 24,
                 "column": 2
               }
             },
@@ -20481,27 +20843,102 @@ define("tez-ui/templates/components/stats-link", ["exports"], function (exports)
           hasRendered: false,
           buildFragment: function buildFragment(dom) {
             var el0 = dom.createDocumentFragment();
-            var el1 = dom.createTextNode("    ");
-            dom.appendChild(el0, el1);
             var el1 = dom.createComment("");
-            dom.appendChild(el0, el1);
-            var el1 = dom.createTextNode(" ");
-            dom.appendChild(el0, el1);
-            var el1 = dom.createComment("");
-            dom.appendChild(el0, el1);
-            var el1 = dom.createTextNode("\n");
             dom.appendChild(el0, el1);
             return el0;
           },
           buildRenderNodes: function buildRenderNodes(dom, fragment, contextualElement) {
-            var morphs = new Array(2);
-            morphs[0] = dom.createMorphAt(fragment, 1, 1, contextualElement);
-            morphs[1] = dom.createMorphAt(fragment, 3, 3, contextualElement);
+            var morphs = new Array(1);
+            morphs[0] = dom.createMorphAt(fragment, 0, 0, contextualElement);
+            dom.insertBoundary(fragment, 0);
+            dom.insertBoundary(fragment, null);
             return morphs;
           },
-          statements: [["inline", "txt", [["get", "value", ["loc", [null, [21, 10], [21, 15]]]]], ["type", "number"], ["loc", [null, [21, 4], [21, 31]]]], ["content", "_statsType", ["loc", [null, [21, 32], [21, 46]]]]],
+          statements: [["block", "link-to", [["get", "routeName", ["loc", [null, [21, 15], [21, 24]]]], ["subexpr", "query-params", [], ["searchText", ["get", "searchText", ["loc", [null, [21, 50], [21, 60]]]]], ["loc", [null, [21, 25], [21, 61]]]]], [], 0, null, ["loc", [null, [21, 4], [23, 16]]]]],
           locals: [],
-          templates: []
+          templates: [child0]
+        };
+      })();
+      var child1 = (function () {
+        var child0 = (function () {
+          return {
+            meta: {
+              "fragmentReason": false,
+              "revision": "Ember@2.2.0",
+              "loc": {
+                "source": null,
+                "start": {
+                  "line": 25,
+                  "column": 4
+                },
+                "end": {
+                  "line": 27,
+                  "column": 4
+                }
+              },
+              "moduleName": "tez-ui/templates/components/stats-link.hbs"
+            },
+            isEmpty: false,
+            arity: 0,
+            cachedFragment: null,
+            hasRendered: false,
+            buildFragment: function buildFragment(dom) {
+              var el0 = dom.createDocumentFragment();
+              var el1 = dom.createTextNode("      ");
+              dom.appendChild(el0, el1);
+              var el1 = dom.createComment("");
+              dom.appendChild(el0, el1);
+              var el1 = dom.createTextNode("\n");
+              dom.appendChild(el0, el1);
+              return el0;
+            },
+            buildRenderNodes: function buildRenderNodes(dom, fragment, contextualElement) {
+              var morphs = new Array(1);
+              morphs[0] = dom.createMorphAt(fragment, 1, 1, contextualElement);
+              return morphs;
+            },
+            statements: [["inline", "txt", [["get", "value", ["loc", [null, [26, 12], [26, 17]]]]], ["type", "number"], ["loc", [null, [26, 6], [26, 33]]]]],
+            locals: [],
+            templates: []
+          };
+        })();
+        return {
+          meta: {
+            "fragmentReason": false,
+            "revision": "Ember@2.2.0",
+            "loc": {
+              "source": null,
+              "start": {
+                "line": 24,
+                "column": 2
+              },
+              "end": {
+                "line": 28,
+                "column": 2
+              }
+            },
+            "moduleName": "tez-ui/templates/components/stats-link.hbs"
+          },
+          isEmpty: false,
+          arity: 0,
+          cachedFragment: null,
+          hasRendered: false,
+          buildFragment: function buildFragment(dom) {
+            var el0 = dom.createDocumentFragment();
+            var el1 = dom.createComment("");
+            dom.appendChild(el0, el1);
+            return el0;
+          },
+          buildRenderNodes: function buildRenderNodes(dom, fragment, contextualElement) {
+            var morphs = new Array(1);
+            morphs[0] = dom.createMorphAt(fragment, 0, 0, contextualElement);
+            dom.insertBoundary(fragment, 0);
+            dom.insertBoundary(fragment, null);
+            return morphs;
+          },
+          statements: [["block", "link-to", [["get", "routeName", ["loc", [null, [25, 15], [25, 24]]]]], [], 0, null, ["loc", [null, [25, 4], [27, 16]]]]],
+          locals: [],
+          templates: [child0]
         };
       })();
       return {
@@ -20515,7 +20952,7 @@ define("tez-ui/templates/components/stats-link", ["exports"], function (exports)
               "column": 0
             },
             "end": {
-              "line": 23,
+              "line": 29,
               "column": 0
             }
           },
@@ -20538,9 +20975,9 @@ define("tez-ui/templates/components/stats-link", ["exports"], function (exports)
           dom.insertBoundary(fragment, null);
           return morphs;
         },
-        statements: [["block", "link-to", [["get", "routeName", ["loc", [null, [20, 13], [20, 22]]]], ["subexpr", "query-params", [], ["searchText", ["get", "searchText", ["loc", [null, [20, 48], [20, 58]]]]], ["loc", [null, [20, 23], [20, 59]]]]], [], 0, null, ["loc", [null, [20, 2], [22, 14]]]]],
+        statements: [["block", "if", [["get", "searchText", ["loc", [null, [20, 8], [20, 18]]]]], [], 0, 1, ["loc", [null, [20, 2], [28, 9]]]]],
         locals: [],
-        templates: [child0]
+        templates: [child0, child1]
       };
     })();
     var child1 = (function () {
@@ -20551,11 +20988,11 @@ define("tez-ui/templates/components/stats-link", ["exports"], function (exports)
           "loc": {
             "source": null,
             "start": {
-              "line": 23,
+              "line": 29,
               "column": 0
             },
             "end": {
-              "line": 25,
+              "line": 31,
               "column": 0
             }
           },
@@ -20580,7 +21017,7 @@ define("tez-ui/templates/components/stats-link", ["exports"], function (exports)
           morphs[0] = dom.createMorphAt(fragment, 1, 1, contextualElement);
           return morphs;
         },
-        statements: [["inline", "txt", [["get", "value", ["loc", [null, [24, 8], [24, 13]]]]], ["type", "number"], ["loc", [null, [24, 2], [24, 29]]]]],
+        statements: [["inline", "txt", [["get", "value", ["loc", [null, [30, 8], [30, 13]]]]], ["type", "number"], ["loc", [null, [30, 2], [30, 29]]]]],
         locals: [],
         templates: []
       };
@@ -20599,7 +21036,7 @@ define("tez-ui/templates/components/stats-link", ["exports"], function (exports)
             "column": 0
           },
           "end": {
-            "line": 26,
+            "line": 32,
             "column": 0
           }
         },
@@ -20623,7 +21060,7 @@ define("tez-ui/templates/components/stats-link", ["exports"], function (exports)
         dom.insertBoundary(fragment, null);
         return morphs;
       },
-      statements: [["block", "if", [["get", "value", ["loc", [null, [19, 6], [19, 11]]]]], [], 0, 1, ["loc", [null, [19, 0], [25, 7]]]]],
+      statements: [["block", "if", [["get", "value", ["loc", [null, [19, 6], [19, 11]]]]], [], 0, 1, ["loc", [null, [19, 0], [31, 7]]]]],
       locals: [],
       templates: [child0, child1]
     };
@@ -22176,7 +22613,7 @@ define("tez-ui/templates/dag/index", ["exports"], function (exports) {
           morphs[11] = dom.createMorphAt(dom.childAt(element0, [23, 3]), 1, 1);
           return morphs;
         },
-        statements: [["inline", "bs-button", [], ["icon", "fa fa-download", "title", "Download data", "defaultText", "Download data", "type", "info", "action", "downloadDagJson"], ["loc", [null, [29, 10], [29, 132]]]], ["block", "link-to", ["app", ["get", "model.appID", ["loc", [null, [35, 27], [35, 38]]]]], ["class", "ember-table-content"], 0, null, ["loc", [null, [35, 10], [37, 22]]]], ["content", "model.entityID", ["loc", [null, [42, 12], [42, 30]]]], ["content", "model.name", ["loc", [null, [46, 12], [46, 26]]]], ["content", "model.submitter", ["loc", [null, [50, 12], [50, 31]]]], ["inline", "em-table-status-cell", [], ["content", ["subexpr", "@mut", [["get", "model.status", ["loc", [null, [54, 43], [54, 55]]]]], [], []]], ["loc", [null, [54, 12], [54, 57]]]], ["inline", "em-table-progress-cell", [], ["content", ["subexpr", "@mut", [["get", "model.progress", ["loc", [null, [58, 45], [58, 59]]]]], [], []]], ["loc", [null, [58, 12], [58, 61]]]], ["inline", "date-formatter", [], ["content", ["subexpr", "@mut", [["get", "model.startTime", ["loc", [null, [62, 37], [62, 52]]]]], [], []]], ["loc", [null, [62, 12], [62, 54]]]], ["inline", "date-formatter", [], ["content", ["subexpr", "@mut", [["get", "model.endTime", ["loc", [null, [66, 37], [66, 50]]]]], [], []]], ["loc", [null, [66, 12], [66, 52]]]], ["inline", "txt", [["get", "model.duration", ["loc", [null, [70, 18], [70, 32]]]]], ["type", "duration"], ["loc", [null, [70, 12], [70, 50]]]], ["inline", "txt", [["get", "model.queue", ["loc", [null, [74, 18], [74, 29]]]]], [], ["loc", [null, [74, 12], [74, 31]]]], ["inline", "em-table-linked-cell", [], ["content", ["subexpr", "@mut", [["get", "model.containerLogs", ["loc", [null, [79, 41], [79, 60]]]]], [], []], "definition", ["subexpr", "@mut", [["get", "logLinkDefinition", ["loc", [null, [79, 72], [79, 89]]]]], [], []]], ["loc", [null, [79, 10], [79, 91]]]]],
+        statements: [["inline", "bs-button", [], ["icon", "fa fa-download", "title", "Download data", "defaultText", "Download data", "type", "info", "action", "downloadDagJson"], ["loc", [null, [29, 10], [29, 132]]]], ["block", "link-to", ["app", ["get", "model.appID", ["loc", [null, [35, 27], [35, 38]]]]], ["class", "ember-table-content"], 0, null, ["loc", [null, [35, 10], [37, 22]]]], ["content", "model.entityID", ["loc", [null, [42, 12], [42, 30]]]], ["content", "model.name", ["loc", [null, [46, 12], [46, 26]]]], ["content", "model.submitter", ["loc", [null, [50, 12], [50, 31]]]], ["inline", "em-table-status-cell", [], ["content", ["subexpr", "@mut", [["get", "model.finalStatus", ["loc", [null, [54, 43], [54, 60]]]]], [], []]], ["loc", [null, [54, 12], [54, 62]]]], ["inline", "em-table-progress-cell", [], ["content", ["subexpr", "@mut", [["get", "model.progress", ["loc", [null, [58, 45], [58, 59]]]]], [], []]], ["loc", [null, [58, 12], [58, 61]]]], ["inline", "date-formatter", [], ["content", ["subexpr", "@mut", [["get", "model.startTime", ["loc", [null, [62, 37], [62, 52]]]]], [], []]], ["loc", [null, [62, 12], [62, 54]]]], ["inline", "date-formatter", [], ["content", ["subexpr", "@mut", [["get", "model.endTime", ["loc", [null, [66, 37], [66, 50]]]]], [], []]], ["loc", [null, [66, 12], [66, 52]]]], ["inline", "txt", [["get", "model.duration", ["loc", [null, [70, 18], [70, 32]]]]], ["type", "duration"], ["loc", [null, [70, 12], [70, 50]]]], ["inline", "txt", [["get", "model.queue", ["loc", [null, [74, 18], [74, 29]]]]], [], ["loc", [null, [74, 12], [74, 31]]]], ["inline", "em-table-linked-cell", [], ["content", ["subexpr", "@mut", [["get", "model.containerLogs", ["loc", [null, [79, 41], [79, 60]]]]], [], []], "definition", ["subexpr", "@mut", [["get", "logLinkDefinition", ["loc", [null, [79, 72], [79, 89]]]]], [], []]], ["loc", [null, [79, 10], [79, 91]]]]],
         locals: [],
         templates: [child0]
       };
@@ -22498,24 +22935,6 @@ define("tez-ui/templates/dag/index/index", ["exports"], function (exports) {
             var el4 = dom.createTextNode("\n        ");
             dom.appendChild(el3, el4);
             var el4 = dom.createElement("td");
-            var el5 = dom.createTextNode("Succeeded Vertices");
-            dom.appendChild(el4, el5);
-            dom.appendChild(el3, el4);
-            var el4 = dom.createTextNode("\n        ");
-            dom.appendChild(el3, el4);
-            var el4 = dom.createElement("td");
-            var el5 = dom.createComment("");
-            dom.appendChild(el4, el5);
-            dom.appendChild(el3, el4);
-            var el4 = dom.createTextNode("\n      ");
-            dom.appendChild(el3, el4);
-            dom.appendChild(el2, el3);
-            var el3 = dom.createTextNode("\n      ");
-            dom.appendChild(el2, el3);
-            var el3 = dom.createElement("tr");
-            var el4 = dom.createTextNode("\n        ");
-            dom.appendChild(el3, el4);
-            var el4 = dom.createElement("td");
             var el5 = dom.createTextNode("Total Vertices");
             dom.appendChild(el4, el5);
             dom.appendChild(el3, el4);
@@ -22534,7 +22953,7 @@ define("tez-ui/templates/dag/index/index", ["exports"], function (exports) {
             var el4 = dom.createTextNode("\n        ");
             dom.appendChild(el3, el4);
             var el4 = dom.createElement("td");
-            var el5 = dom.createTextNode("Succeeded Tasks");
+            var el5 = dom.createTextNode("Succeeded Vertices");
             dom.appendChild(el4, el5);
             dom.appendChild(el3, el4);
             var el4 = dom.createTextNode("\n        ");
@@ -22553,6 +22972,24 @@ define("tez-ui/templates/dag/index/index", ["exports"], function (exports) {
             dom.appendChild(el3, el4);
             var el4 = dom.createElement("td");
             var el5 = dom.createTextNode("Total Tasks");
+            dom.appendChild(el4, el5);
+            dom.appendChild(el3, el4);
+            var el4 = dom.createTextNode("\n        ");
+            dom.appendChild(el3, el4);
+            var el4 = dom.createElement("td");
+            var el5 = dom.createComment("");
+            dom.appendChild(el4, el5);
+            dom.appendChild(el3, el4);
+            var el4 = dom.createTextNode("\n      ");
+            dom.appendChild(el3, el4);
+            dom.appendChild(el2, el3);
+            var el3 = dom.createTextNode("\n      ");
+            dom.appendChild(el2, el3);
+            var el3 = dom.createElement("tr");
+            var el4 = dom.createTextNode("\n        ");
+            dom.appendChild(el3, el4);
+            var el4 = dom.createElement("td");
+            var el5 = dom.createTextNode("Succeeded Tasks");
             dom.appendChild(el4, el5);
             dom.appendChild(el3, el4);
             var el4 = dom.createTextNode("\n        ");
@@ -22659,7 +23096,7 @@ define("tez-ui/templates/dag/index/index", ["exports"], function (exports) {
             morphs[7] = dom.createMorphAt(dom.childAt(element0, [15, 3]), 0, 0);
             return morphs;
           },
-          statements: [["inline", "stats-link", [], ["value", ["subexpr", "@mut", [["get", "stats.succeededVertices", ["loc", [null, [30, 31], [30, 54]]]]], [], []], "routeName", "dag.vertices", "statsType", "SUCCEEDED"], ["loc", [null, [30, 12], [30, 103]]]], ["content", "stats.totalVertices", ["loc", [null, [34, 12], [34, 35]]]], ["inline", "stats-link", [], ["value", ["subexpr", "@mut", [["get", "stats.succeededTasks", ["loc", [null, [38, 31], [38, 51]]]]], [], []], "routeName", "dag.tasks", "statsType", "SUCCEEDED"], ["loc", [null, [38, 12], [38, 97]]]], ["content", "stats.totalTasks", ["loc", [null, [42, 12], [42, 32]]]], ["inline", "stats-link", [], ["value", ["subexpr", "@mut", [["get", "stats.failedTasks", ["loc", [null, [46, 31], [46, 48]]]]], [], []], "routeName", "dag.tasks", "statsType", "FAILED"], ["loc", [null, [46, 12], [46, 91]]]], ["inline", "stats-link", [], ["value", ["subexpr", "@mut", [["get", "stats.killedTasks", ["loc", [null, [50, 31], [50, 48]]]]], [], []], "routeName", "dag.tasks", "statsType", "KILLED"], ["loc", [null, [50, 12], [50, 91]]]], ["inline", "stats-link", [], ["value", ["subexpr", "@mut", [["get", "stats.failedTaskAttempts", ["loc", [null, [54, 31], [54, 55]]]]], [], []], "routeName", "dag.attempts", "statsType", "FAILED"], ["loc", [null, [54, 12], [54, 101]]]], ["inline", "stats-link", [], ["value", ["subexpr", "@mut", [["get", "stats.killedTaskAttempts", ["loc", [null, [58, 31], [58, 55]]]]], [], []], "routeName", "dag.attempts", "statsType", "KILLED"], ["loc", [null, [58, 12], [58, 101]]]]],
+          statements: [["inline", "stats-link", [], ["value", ["subexpr", "@mut", [["get", "stats.totalVertices", ["loc", [null, [30, 31], [30, 50]]]]], [], []], "routeName", "dag.vertices"], ["loc", [null, [30, 12], [30, 77]]]], ["inline", "stats-link", [], ["value", ["subexpr", "@mut", [["get", "stats.succeededVertices", ["loc", [null, [34, 31], [34, 54]]]]], [], []], "routeName", "dag.vertices", "statsType", "SUCCEEDED"], ["loc", [null, [34, 12], [34, 103]]]], ["inline", "stats-link", [], ["value", ["subexpr", "@mut", [["get", "stats.totalTasks", ["loc", [null, [38, 31], [38, 47]]]]], [], []], "routeName", "dag.tasks"], ["loc", [null, [38, 12], [38, 71]]]], ["inline", "stats-link", [], ["value", ["subexpr", "@mut", [["get", "stats.succeededTasks", ["loc", [null, [42, 31], [42, 51]]]]], [], []], "routeName", "dag.tasks", "statsType", "SUCCEEDED"], ["loc", [null, [42, 12], [42, 97]]]], ["inline", "stats-link", [], ["value", ["subexpr", "@mut", [["get", "stats.failedTasks", ["loc", [null, [46, 31], [46, 48]]]]], [], []], "routeName", "dag.tasks", "statsType", "FAILED"], ["loc", [null, [46, 12], [46, 91]]]], ["inline", "stats-link", [], ["value", ["subexpr", "@mut", [["get", "stats.killedTasks", ["loc", [null, [50, 31], [50, 48]]]]], [], []], "routeName", "dag.tasks", "statsType", "KILLED"], ["loc", [null, [50, 12], [50, 91]]]], ["inline", "stats-link", [], ["value", ["subexpr", "@mut", [["get", "stats.failedTaskAttempts", ["loc", [null, [54, 31], [54, 55]]]]], [], []], "routeName", "dag.attempts", "statsType", "FAILED"], ["loc", [null, [54, 12], [54, 101]]]], ["inline", "stats-link", [], ["value", ["subexpr", "@mut", [["get", "stats.killedTaskAttempts", ["loc", [null, [58, 31], [58, 55]]]]], [], []], "routeName", "dag.attempts", "statsType", "KILLED"], ["loc", [null, [58, 12], [58, 101]]]]],
           locals: [],
           templates: []
         };
@@ -23485,11 +23922,11 @@ define("tez-ui/templates/home/index", ["exports"], function (exports) {
             "loc": {
               "source": null,
               "start": {
-                "line": 39,
+                "line": 40,
                 "column": 2
               },
               "end": {
-                "line": 43,
+                "line": 44,
                 "column": 2
               }
             },
@@ -23543,7 +23980,7 @@ define("tez-ui/templates/home/index", ["exports"], function (exports) {
               "column": 0
             },
             "end": {
-              "line": 44,
+              "line": 45,
               "column": 0
             }
           },
@@ -23572,7 +24009,7 @@ define("tez-ui/templates/home/index", ["exports"], function (exports) {
           dom.insertBoundary(fragment, null);
           return morphs;
         },
-        statements: [["inline", "em-table", [], ["columns", ["subexpr", "@mut", [["get", "visibleColumns", ["loc", [null, [21, 12], [21, 26]]]]], [], []], "rows", ["subexpr", "@mut", [["get", "model", ["loc", [null, [22, 9], [22, 14]]]]], [], []], "rowCount", ["subexpr", "@mut", [["get", "rowCount", ["loc", [null, [23, 13], [23, 21]]]]], [], []], "classNames", "all-dags-table", "headerComponentNames", ["subexpr", "@mut", [["get", "headerComponentNames", ["loc", [null, [27, 25], [27, 45]]]]], [], []], "footerComponentNames", ["subexpr", "@mut", [["get", "footerComponentNames", ["loc", [null, [28, 25], [28, 45]]]]], [], []], "definition", ["subexpr", "@mut", [["get", "definition", ["loc", [null, [30, 15], [30, 25]]]]], [], []], "enableSort", false, "rowAction", "rowCountChanged", "search", "search", "loadPage", "loadPage", "reload", "reload"], ["loc", [null, [20, 2], [38, 4]]]], ["block", "if", [["get", "queue", ["loc", [null, [39, 8], [39, 13]]]]], [], 0, null, ["loc", [null, [39, 2], [43, 9]]]]],
+        statements: [["inline", "em-table", [], ["columns", ["subexpr", "@mut", [["get", "visibleColumns", ["loc", [null, [21, 12], [21, 26]]]]], [], []], "rows", ["subexpr", "@mut", [["get", "model", ["loc", [null, [22, 9], [22, 14]]]]], [], []], "rowCount", ["subexpr", "@mut", [["get", "rowCount", ["loc", [null, [23, 13], [23, 21]]]]], [], []], "classNames", "all-dags-table", "headerComponentNames", ["subexpr", "@mut", [["get", "headerComponentNames", ["loc", [null, [27, 25], [27, 45]]]]], [], []], "footerComponentNames", ["subexpr", "@mut", [["get", "footerComponentNames", ["loc", [null, [28, 25], [28, 45]]]]], [], []], "definition", ["subexpr", "@mut", [["get", "definition", ["loc", [null, [30, 15], [30, 25]]]]], [], []], "enableSort", false, "rowAction", "rowCountChanged", "search", "search", "loadPage", "loadPage", "reload", "reload", "rowsChanged", "tableRowsChanged"], ["loc", [null, [20, 2], [39, 4]]]], ["block", "if", [["get", "queue", ["loc", [null, [40, 8], [40, 13]]]]], [], 0, null, ["loc", [null, [40, 2], [44, 9]]]]],
         locals: [],
         templates: [child0]
       };
@@ -23585,11 +24022,11 @@ define("tez-ui/templates/home/index", ["exports"], function (exports) {
           "loc": {
             "source": null,
             "start": {
-              "line": 44,
+              "line": 45,
               "column": 0
             },
             "end": {
-              "line": 46,
+              "line": 47,
               "column": 0
             }
           },
@@ -23614,7 +24051,7 @@ define("tez-ui/templates/home/index", ["exports"], function (exports) {
           morphs[0] = dom.createMorphAt(fragment, 1, 1, contextualElement);
           return morphs;
         },
-        statements: [["inline", "partial", ["loading"], [], ["loc", [null, [45, 2], [45, 23]]]]],
+        statements: [["inline", "partial", ["loading"], [], ["loc", [null, [46, 2], [46, 23]]]]],
         locals: [],
         templates: []
       };
@@ -23633,7 +24070,7 @@ define("tez-ui/templates/home/index", ["exports"], function (exports) {
             "column": 0
           },
           "end": {
-            "line": 47,
+            "line": 48,
             "column": 0
           }
         },
@@ -23657,7 +24094,7 @@ define("tez-ui/templates/home/index", ["exports"], function (exports) {
         dom.insertBoundary(fragment, null);
         return morphs;
       },
-      statements: [["block", "if", [["get", "loaded", ["loc", [null, [19, 6], [19, 12]]]]], [], 0, 1, ["loc", [null, [19, 0], [46, 7]]]]],
+      statements: [["block", "if", [["get", "loaded", ["loc", [null, [19, 6], [19, 12]]]]], [], 0, 1, ["loc", [null, [19, 0], [47, 7]]]]],
       locals: [],
       templates: [child0, child1]
     };
@@ -28258,11 +28695,11 @@ define("tez-ui/templates/vertex/index", ["exports"], function (exports) {
             "loc": {
               "source": null,
               "start": {
-                "line": 89,
+                "line": 97,
                 "column": 10
               },
               "end": {
-                "line": 91,
+                "line": 99,
                 "column": 10
               }
             },
@@ -28287,7 +28724,7 @@ define("tez-ui/templates/vertex/index", ["exports"], function (exports) {
             morphs[0] = dom.createMorphAt(fragment, 1, 1, contextualElement);
             return morphs;
           },
-          statements: [["inline", "em-table-linked-cell", [], ["content", ["subexpr", "@mut", [["get", "firstTasksToStart", ["loc", [null, [90, 44], [90, 61]]]]], [], []]], ["loc", [null, [90, 13], [90, 63]]]]],
+          statements: [["inline", "em-table-linked-cell", [], ["content", ["subexpr", "@mut", [["get", "firstTasksToStart", ["loc", [null, [98, 44], [98, 61]]]]], [], []]], ["loc", [null, [98, 13], [98, 63]]]]],
           locals: [],
           templates: []
         };
@@ -28300,11 +28737,11 @@ define("tez-ui/templates/vertex/index", ["exports"], function (exports) {
             "loc": {
               "source": null,
               "start": {
-                "line": 98,
+                "line": 106,
                 "column": 10
               },
               "end": {
-                "line": 100,
+                "line": 108,
                 "column": 10
               }
             },
@@ -28329,7 +28766,7 @@ define("tez-ui/templates/vertex/index", ["exports"], function (exports) {
             morphs[0] = dom.createMorphAt(fragment, 1, 1, contextualElement);
             return morphs;
           },
-          statements: [["inline", "em-table-linked-cell", [], ["content", ["subexpr", "@mut", [["get", "lastTasksToFinish", ["loc", [null, [99, 44], [99, 61]]]]], [], []]], ["loc", [null, [99, 13], [99, 63]]]]],
+          statements: [["inline", "em-table-linked-cell", [], ["content", ["subexpr", "@mut", [["get", "lastTasksToFinish", ["loc", [null, [107, 44], [107, 61]]]]], [], []]], ["loc", [null, [107, 13], [107, 63]]]]],
           locals: [],
           templates: []
         };
@@ -28342,11 +28779,11 @@ define("tez-ui/templates/vertex/index", ["exports"], function (exports) {
             "loc": {
               "source": null,
               "start": {
-                "line": 113,
+                "line": 121,
                 "column": 10
               },
               "end": {
-                "line": 115,
+                "line": 123,
                 "column": 10
               }
             },
@@ -28371,7 +28808,7 @@ define("tez-ui/templates/vertex/index", ["exports"], function (exports) {
             morphs[0] = dom.createMorphAt(fragment, 1, 1, contextualElement);
             return morphs;
           },
-          statements: [["inline", "em-table-linked-cell", [], ["content", ["subexpr", "@mut", [["get", "shortestDurationTasks", ["loc", [null, [114, 44], [114, 65]]]]], [], []]], ["loc", [null, [114, 13], [114, 67]]]]],
+          statements: [["inline", "em-table-linked-cell", [], ["content", ["subexpr", "@mut", [["get", "shortestDurationTasks", ["loc", [null, [122, 44], [122, 65]]]]], [], []]], ["loc", [null, [122, 13], [122, 67]]]]],
           locals: [],
           templates: []
         };
@@ -28384,11 +28821,11 @@ define("tez-ui/templates/vertex/index", ["exports"], function (exports) {
             "loc": {
               "source": null,
               "start": {
-                "line": 122,
+                "line": 130,
                 "column": 10
               },
               "end": {
-                "line": 124,
+                "line": 132,
                 "column": 10
               }
             },
@@ -28413,7 +28850,7 @@ define("tez-ui/templates/vertex/index", ["exports"], function (exports) {
             morphs[0] = dom.createMorphAt(fragment, 1, 1, contextualElement);
             return morphs;
           },
-          statements: [["inline", "em-table-linked-cell", [], ["content", ["subexpr", "@mut", [["get", "longestDurationTasks", ["loc", [null, [123, 44], [123, 64]]]]], [], []]], ["loc", [null, [123, 13], [123, 66]]]]],
+          statements: [["inline", "em-table-linked-cell", [], ["content", ["subexpr", "@mut", [["get", "longestDurationTasks", ["loc", [null, [131, 44], [131, 64]]]]], [], []]], ["loc", [null, [131, 13], [131, 66]]]]],
           locals: [],
           templates: []
         };
@@ -28426,11 +28863,11 @@ define("tez-ui/templates/vertex/index", ["exports"], function (exports) {
             "loc": {
               "source": null,
               "start": {
-                "line": 131,
+                "line": 139,
                 "column": 2
               },
               "end": {
-                "line": 153,
+                "line": 161,
                 "column": 2
               }
             },
@@ -28564,7 +29001,7 @@ define("tez-ui/templates/vertex/index", ["exports"], function (exports) {
             morphs[5] = dom.createMorphAt(element3, 2, 2);
             return morphs;
           },
-          statements: [["inline", "txt", [["get", "model.servicePlugin.taskSchedulerName", ["loc", [null, [141, 18], [141, 55]]]]], [], ["loc", [null, [141, 12], [141, 57]]]], ["inline", "txt", [["get", "model.servicePlugin.taskSchedulerClassName", ["loc", [null, [141, 66], [141, 108]]]]], [], ["loc", [null, [141, 60], [141, 110]]]], ["inline", "txt", [["get", "model.servicePlugin.taskCommunicatorName", ["loc", [null, [145, 18], [145, 58]]]]], [], ["loc", [null, [145, 12], [145, 60]]]], ["inline", "txt", [["get", "model.servicePlugin.taskCommunicatorClassName", ["loc", [null, [145, 69], [145, 114]]]]], [], ["loc", [null, [145, 63], [145, 116]]]], ["inline", "txt", [["get", "model.servicePlugin.containerLauncherName", ["loc", [null, [149, 18], [149, 59]]]]], [], ["loc", [null, [149, 12], [149, 61]]]], ["inline", "txt", [["get", "model.servicePlugin.containerLauncherClassName", ["loc", [null, [149, 70], [149, 116]]]]], [], ["loc", [null, [149, 64], [149, 118]]]]],
+          statements: [["inline", "txt", [["get", "model.servicePlugin.taskSchedulerName", ["loc", [null, [149, 18], [149, 55]]]]], [], ["loc", [null, [149, 12], [149, 57]]]], ["inline", "txt", [["get", "model.servicePlugin.taskSchedulerClassName", ["loc", [null, [149, 66], [149, 108]]]]], [], ["loc", [null, [149, 60], [149, 110]]]], ["inline", "txt", [["get", "model.servicePlugin.taskCommunicatorName", ["loc", [null, [153, 18], [153, 58]]]]], [], ["loc", [null, [153, 12], [153, 60]]]], ["inline", "txt", [["get", "model.servicePlugin.taskCommunicatorClassName", ["loc", [null, [153, 69], [153, 114]]]]], [], ["loc", [null, [153, 63], [153, 116]]]], ["inline", "txt", [["get", "model.servicePlugin.containerLauncherName", ["loc", [null, [157, 18], [157, 59]]]]], [], ["loc", [null, [157, 12], [157, 61]]]], ["inline", "txt", [["get", "model.servicePlugin.containerLauncherClassName", ["loc", [null, [157, 70], [157, 116]]]]], [], ["loc", [null, [157, 64], [157, 118]]]]],
           locals: [],
           templates: []
         };
@@ -28577,11 +29014,11 @@ define("tez-ui/templates/vertex/index", ["exports"], function (exports) {
             "loc": {
               "source": null,
               "start": {
-                "line": 155,
+                "line": 163,
                 "column": 2
               },
               "end": {
-                "line": 164,
+                "line": 172,
                 "column": 2
               }
             },
@@ -28627,7 +29064,7 @@ define("tez-ui/templates/vertex/index", ["exports"], function (exports) {
             morphs[0] = dom.createUnsafeMorphAt(dom.childAt(fragment, [1, 3]), 1, 1);
             return morphs;
           },
-          statements: [["content", "model.description", ["loc", [null, [161, 8], [161, 31]]]]],
+          statements: [["content", "model.description", ["loc", [null, [169, 8], [169, 31]]]]],
           locals: [],
           templates: []
         };
@@ -28640,11 +29077,11 @@ define("tez-ui/templates/vertex/index", ["exports"], function (exports) {
             "loc": {
               "source": null,
               "start": {
-                "line": 166,
+                "line": 174,
                 "column": 2
               },
               "end": {
-                "line": 175,
+                "line": 183,
                 "column": 2
               }
             },
@@ -28690,7 +29127,7 @@ define("tez-ui/templates/vertex/index", ["exports"], function (exports) {
             morphs[0] = dom.createUnsafeMorphAt(dom.childAt(fragment, [1, 3]), 1, 1);
             return morphs;
           },
-          statements: [["content", "model.diagnostics", ["loc", [null, [172, 8], [172, 31]]]]],
+          statements: [["content", "model.diagnostics", ["loc", [null, [180, 8], [180, 31]]]]],
           locals: [],
           templates: []
         };
@@ -28706,7 +29143,7 @@ define("tez-ui/templates/vertex/index", ["exports"], function (exports) {
               "column": 0
             },
             "end": {
-              "line": 177,
+              "line": 185,
               "column": 0
             }
           },
@@ -28998,6 +29435,42 @@ define("tez-ui/templates/vertex/index", ["exports"], function (exports) {
           var el4 = dom.createTextNode("\n        ");
           dom.appendChild(el3, el4);
           var el4 = dom.createElement("td");
+          var el5 = dom.createTextNode("Failed Task Attempts");
+          dom.appendChild(el4, el5);
+          dom.appendChild(el3, el4);
+          var el4 = dom.createTextNode("\n        ");
+          dom.appendChild(el3, el4);
+          var el4 = dom.createElement("td");
+          var el5 = dom.createComment("");
+          dom.appendChild(el4, el5);
+          dom.appendChild(el3, el4);
+          var el4 = dom.createTextNode("\n      ");
+          dom.appendChild(el3, el4);
+          dom.appendChild(el2, el3);
+          var el3 = dom.createTextNode("\n      ");
+          dom.appendChild(el2, el3);
+          var el3 = dom.createElement("tr");
+          var el4 = dom.createTextNode("\n        ");
+          dom.appendChild(el3, el4);
+          var el4 = dom.createElement("td");
+          var el5 = dom.createTextNode("Killed Task Attempts");
+          dom.appendChild(el4, el5);
+          dom.appendChild(el3, el4);
+          var el4 = dom.createTextNode("\n        ");
+          dom.appendChild(el3, el4);
+          var el4 = dom.createElement("td");
+          var el5 = dom.createComment("");
+          dom.appendChild(el4, el5);
+          dom.appendChild(el3, el4);
+          var el4 = dom.createTextNode("\n      ");
+          dom.appendChild(el3, el4);
+          dom.appendChild(el2, el3);
+          var el3 = dom.createTextNode("\n      ");
+          dom.appendChild(el2, el3);
+          var el3 = dom.createElement("tr");
+          var el4 = dom.createTextNode("\n        ");
+          dom.appendChild(el3, el4);
+          var el4 = dom.createElement("td");
           var el5 = dom.createTextNode("First Task Start Time");
           dom.appendChild(el4, el5);
           dom.appendChild(el3, el4);
@@ -29147,11 +29620,11 @@ define("tez-ui/templates/vertex/index", ["exports"], function (exports) {
         buildRenderNodes: function buildRenderNodes(dom, fragment, contextualElement) {
           var element4 = dom.childAt(fragment, [1, 3]);
           var element5 = dom.childAt(fragment, [3, 3]);
-          var element6 = dom.childAt(element5, [9, 3]);
-          var element7 = dom.childAt(element5, [11, 3]);
-          var element8 = dom.childAt(element5, [15, 3]);
-          var element9 = dom.childAt(element5, [17, 3]);
-          var morphs = new Array(24);
+          var element6 = dom.childAt(element5, [13, 3]);
+          var element7 = dom.childAt(element5, [15, 3]);
+          var element8 = dom.childAt(element5, [19, 3]);
+          var element9 = dom.childAt(element5, [21, 3]);
+          var morphs = new Array(26);
           morphs[0] = dom.createMorphAt(dom.childAt(element4, [1, 3]), 0, 0);
           morphs[1] = dom.createMorphAt(dom.childAt(element4, [3, 3]), 0, 0);
           morphs[2] = dom.createMorphAt(dom.childAt(element4, [5, 3]), 0, 0);
@@ -29164,21 +29637,23 @@ define("tez-ui/templates/vertex/index", ["exports"], function (exports) {
           morphs[9] = dom.createMorphAt(dom.childAt(element5, [3, 3]), 0, 0);
           morphs[10] = dom.createMorphAt(dom.childAt(element5, [5, 3]), 0, 0);
           morphs[11] = dom.createMorphAt(dom.childAt(element5, [7, 3]), 0, 0);
-          morphs[12] = dom.createMorphAt(element6, 1, 1);
-          morphs[13] = dom.createMorphAt(element6, 3, 3);
-          morphs[14] = dom.createMorphAt(element7, 1, 1);
-          morphs[15] = dom.createMorphAt(element7, 3, 3);
-          morphs[16] = dom.createMorphAt(dom.childAt(element5, [13, 3]), 1, 1);
-          morphs[17] = dom.createMorphAt(element8, 1, 1);
-          morphs[18] = dom.createMorphAt(element8, 3, 3);
-          morphs[19] = dom.createMorphAt(element9, 1, 1);
-          morphs[20] = dom.createMorphAt(element9, 3, 3);
-          morphs[21] = dom.createMorphAt(fragment, 7, 7, contextualElement);
-          morphs[22] = dom.createMorphAt(fragment, 9, 9, contextualElement);
-          morphs[23] = dom.createMorphAt(fragment, 11, 11, contextualElement);
+          morphs[12] = dom.createMorphAt(dom.childAt(element5, [9, 3]), 0, 0);
+          morphs[13] = dom.createMorphAt(dom.childAt(element5, [11, 3]), 0, 0);
+          morphs[14] = dom.createMorphAt(element6, 1, 1);
+          morphs[15] = dom.createMorphAt(element6, 3, 3);
+          morphs[16] = dom.createMorphAt(element7, 1, 1);
+          morphs[17] = dom.createMorphAt(element7, 3, 3);
+          morphs[18] = dom.createMorphAt(dom.childAt(element5, [17, 3]), 1, 1);
+          morphs[19] = dom.createMorphAt(element8, 1, 1);
+          morphs[20] = dom.createMorphAt(element8, 3, 3);
+          morphs[21] = dom.createMorphAt(element9, 1, 1);
+          morphs[22] = dom.createMorphAt(element9, 3, 3);
+          morphs[23] = dom.createMorphAt(fragment, 7, 7, contextualElement);
+          morphs[24] = dom.createMorphAt(fragment, 9, 9, contextualElement);
+          morphs[25] = dom.createMorphAt(fragment, 11, 11, contextualElement);
           return morphs;
         },
-        statements: [["content", "model.entityID", ["loc", [null, [29, 12], [29, 30]]]], ["content", "model.name", ["loc", [null, [33, 12], [33, 26]]]], ["content", "model.processorClassName", ["loc", [null, [37, 12], [37, 40]]]], ["inline", "em-table-status-cell", [], ["content", ["subexpr", "@mut", [["get", "model.finalStatus", ["loc", [null, [41, 43], [41, 60]]]]], [], []]], ["loc", [null, [41, 12], [41, 62]]]], ["inline", "em-table-progress-cell", [], ["content", ["subexpr", "@mut", [["get", "model.progress", ["loc", [null, [45, 45], [45, 59]]]]], [], []]], ["loc", [null, [45, 12], [45, 61]]]], ["inline", "date-formatter", [], ["content", ["subexpr", "@mut", [["get", "model.startTime", ["loc", [null, [49, 37], [49, 52]]]]], [], []]], ["loc", [null, [49, 12], [49, 54]]]], ["inline", "date-formatter", [], ["content", ["subexpr", "@mut", [["get", "model.endTime", ["loc", [null, [53, 37], [53, 50]]]]], [], []]], ["loc", [null, [53, 12], [53, 52]]]], ["inline", "txt", [["get", "model.duration", ["loc", [null, [57, 18], [57, 32]]]]], ["type", "duration"], ["loc", [null, [57, 12], [57, 50]]]], ["inline", "txt", [["get", "model.totalTasks", ["loc", [null, [71, 18], [71, 34]]]]], ["type", "number"], ["loc", [null, [71, 12], [71, 50]]]], ["inline", "stats-link", [], ["value", ["subexpr", "@mut", [["get", "model.succeededTasks", ["loc", [null, [75, 31], [75, 51]]]]], [], []], "routeName", "vertex.tasks", "statsType", "SUCCEEDED"], ["loc", [null, [75, 12], [75, 100]]]], ["inline", "stats-link", [], ["value", ["subexpr", "@mut", [["get", "model.failedTasks", ["loc", [null, [79, 31], [79, 48]]]]], [], []], "routeName", "vertex.tasks", "statsType", "FAILED"], ["loc", [null, [79, 12], [79, 94]]]], ["inline", "stats-link", [], ["value", ["subexpr", "@mut", [["get", "model.killedTasks", ["loc", [null, [83, 31], [83, 48]]]]], [], []], "routeName", "vertex.tasks", "statsType", "KILLED"], ["loc", [null, [83, 12], [83, 94]]]], ["inline", "date-formatter", [], ["content", ["subexpr", "@mut", [["get", "model.firstTaskStartTime", ["loc", [null, [88, 35], [88, 59]]]]], [], []]], ["loc", [null, [88, 10], [88, 61]]]], ["block", "if", [["get", "firstTasksToStart", ["loc", [null, [89, 16], [89, 33]]]]], [], 0, null, ["loc", [null, [89, 10], [91, 17]]]], ["inline", "date-formatter", [], ["content", ["subexpr", "@mut", [["get", "model.lastTaskFinishTime", ["loc", [null, [97, 35], [97, 59]]]]], [], []]], ["loc", [null, [97, 10], [97, 61]]]], ["block", "if", [["get", "lastTasksToFinish", ["loc", [null, [98, 16], [98, 33]]]]], [], 1, null, ["loc", [null, [98, 10], [100, 17]]]], ["inline", "txt", [["get", "model.avgDuration", ["loc", [null, [106, 16], [106, 33]]]]], ["type", "duration"], ["loc", [null, [106, 10], [106, 51]]]], ["inline", "txt", [["get", "model.minDuration", ["loc", [null, [112, 16], [112, 33]]]]], ["type", "duration"], ["loc", [null, [112, 10], [112, 51]]]], ["block", "if", [["get", "shortestDurationTasks", ["loc", [null, [113, 16], [113, 37]]]]], [], 2, null, ["loc", [null, [113, 10], [115, 17]]]], ["inline", "txt", [["get", "model.maxDuration", ["loc", [null, [121, 16], [121, 33]]]]], ["type", "duration"], ["loc", [null, [121, 10], [121, 51]]]], ["block", "if", [["get", "longestDurationTasks", ["loc", [null, [122, 16], [122, 36]]]]], [], 3, null, ["loc", [null, [122, 10], [124, 17]]]], ["block", "if", [["get", "model.servicePlugin.taskSchedulerName", ["loc", [null, [131, 8], [131, 45]]]]], [], 4, null, ["loc", [null, [131, 2], [153, 9]]]], ["block", "if", [["get", "model.description", ["loc", [null, [155, 8], [155, 25]]]]], [], 5, null, ["loc", [null, [155, 2], [164, 9]]]], ["block", "if", [["get", "model.diagnostics", ["loc", [null, [166, 8], [166, 25]]]]], [], 6, null, ["loc", [null, [166, 2], [175, 9]]]]],
+        statements: [["content", "model.entityID", ["loc", [null, [29, 12], [29, 30]]]], ["content", "model.name", ["loc", [null, [33, 12], [33, 26]]]], ["content", "model.processorClassName", ["loc", [null, [37, 12], [37, 40]]]], ["inline", "em-table-status-cell", [], ["content", ["subexpr", "@mut", [["get", "model.finalStatus", ["loc", [null, [41, 43], [41, 60]]]]], [], []]], ["loc", [null, [41, 12], [41, 62]]]], ["inline", "em-table-progress-cell", [], ["content", ["subexpr", "@mut", [["get", "model.progress", ["loc", [null, [45, 45], [45, 59]]]]], [], []]], ["loc", [null, [45, 12], [45, 61]]]], ["inline", "date-formatter", [], ["content", ["subexpr", "@mut", [["get", "model.startTime", ["loc", [null, [49, 37], [49, 52]]]]], [], []]], ["loc", [null, [49, 12], [49, 54]]]], ["inline", "date-formatter", [], ["content", ["subexpr", "@mut", [["get", "model.endTime", ["loc", [null, [53, 37], [53, 50]]]]], [], []]], ["loc", [null, [53, 12], [53, 52]]]], ["inline", "txt", [["get", "model.duration", ["loc", [null, [57, 18], [57, 32]]]]], ["type", "duration"], ["loc", [null, [57, 12], [57, 50]]]], ["inline", "stats-link", [], ["value", ["subexpr", "@mut", [["get", "model.totalTasks", ["loc", [null, [71, 31], [71, 47]]]]], [], []], "routeName", "vertex.tasks"], ["loc", [null, [71, 12], [71, 74]]]], ["inline", "stats-link", [], ["value", ["subexpr", "@mut", [["get", "model.succeededTasks", ["loc", [null, [75, 31], [75, 51]]]]], [], []], "routeName", "vertex.tasks", "statsType", "SUCCEEDED"], ["loc", [null, [75, 12], [75, 100]]]], ["inline", "stats-link", [], ["value", ["subexpr", "@mut", [["get", "model.failedTasks", ["loc", [null, [79, 31], [79, 48]]]]], [], []], "routeName", "vertex.tasks", "statsType", "FAILED"], ["loc", [null, [79, 12], [79, 94]]]], ["inline", "stats-link", [], ["value", ["subexpr", "@mut", [["get", "model.killedTasks", ["loc", [null, [83, 31], [83, 48]]]]], [], []], "routeName", "vertex.tasks", "statsType", "KILLED"], ["loc", [null, [83, 12], [83, 94]]]], ["inline", "stats-link", [], ["value", ["subexpr", "@mut", [["get", "model.failedTaskAttempts", ["loc", [null, [87, 31], [87, 55]]]]], [], []], "routeName", "vertex.attempts", "statsType", "FAILED"], ["loc", [null, [87, 12], [87, 104]]]], ["inline", "stats-link", [], ["value", ["subexpr", "@mut", [["get", "model.killedTaskAttempts", ["loc", [null, [91, 31], [91, 55]]]]], [], []], "routeName", "vertex.attempts", "statsType", "KILLED"], ["loc", [null, [91, 12], [91, 104]]]], ["inline", "date-formatter", [], ["content", ["subexpr", "@mut", [["get", "model.firstTaskStartTime", ["loc", [null, [96, 35], [96, 59]]]]], [], []]], ["loc", [null, [96, 10], [96, 61]]]], ["block", "if", [["get", "firstTasksToStart", ["loc", [null, [97, 16], [97, 33]]]]], [], 0, null, ["loc", [null, [97, 10], [99, 17]]]], ["inline", "date-formatter", [], ["content", ["subexpr", "@mut", [["get", "model.lastTaskFinishTime", ["loc", [null, [105, 35], [105, 59]]]]], [], []]], ["loc", [null, [105, 10], [105, 61]]]], ["block", "if", [["get", "lastTasksToFinish", ["loc", [null, [106, 16], [106, 33]]]]], [], 1, null, ["loc", [null, [106, 10], [108, 17]]]], ["inline", "txt", [["get", "model.avgDuration", ["loc", [null, [114, 16], [114, 33]]]]], ["type", "duration"], ["loc", [null, [114, 10], [114, 51]]]], ["inline", "txt", [["get", "model.minDuration", ["loc", [null, [120, 16], [120, 33]]]]], ["type", "duration"], ["loc", [null, [120, 10], [120, 51]]]], ["block", "if", [["get", "shortestDurationTasks", ["loc", [null, [121, 16], [121, 37]]]]], [], 2, null, ["loc", [null, [121, 10], [123, 17]]]], ["inline", "txt", [["get", "model.maxDuration", ["loc", [null, [129, 16], [129, 33]]]]], ["type", "duration"], ["loc", [null, [129, 10], [129, 51]]]], ["block", "if", [["get", "longestDurationTasks", ["loc", [null, [130, 16], [130, 36]]]]], [], 3, null, ["loc", [null, [130, 10], [132, 17]]]], ["block", "if", [["get", "model.servicePlugin.taskSchedulerName", ["loc", [null, [139, 8], [139, 45]]]]], [], 4, null, ["loc", [null, [139, 2], [161, 9]]]], ["block", "if", [["get", "model.description", ["loc", [null, [163, 8], [163, 25]]]]], [], 5, null, ["loc", [null, [163, 2], [172, 9]]]], ["block", "if", [["get", "model.diagnostics", ["loc", [null, [174, 8], [174, 25]]]]], [], 6, null, ["loc", [null, [174, 2], [183, 9]]]]],
         locals: [],
         templates: [child0, child1, child2, child3, child4, child5, child6]
       };
@@ -29191,11 +29666,11 @@ define("tez-ui/templates/vertex/index", ["exports"], function (exports) {
           "loc": {
             "source": null,
             "start": {
-              "line": 177,
+              "line": 185,
               "column": 0
             },
             "end": {
-              "line": 179,
+              "line": 187,
               "column": 0
             }
           },
@@ -29220,7 +29695,7 @@ define("tez-ui/templates/vertex/index", ["exports"], function (exports) {
           morphs[0] = dom.createMorphAt(fragment, 1, 1, contextualElement);
           return morphs;
         },
-        statements: [["inline", "partial", ["loading"], [], ["loc", [null, [178, 2], [178, 23]]]]],
+        statements: [["inline", "partial", ["loading"], [], ["loc", [null, [186, 2], [186, 23]]]]],
         locals: [],
         templates: []
       };
@@ -29239,7 +29714,7 @@ define("tez-ui/templates/vertex/index", ["exports"], function (exports) {
             "column": 0
           },
           "end": {
-            "line": 180,
+            "line": 188,
             "column": 0
           }
         },
@@ -29263,7 +29738,7 @@ define("tez-ui/templates/vertex/index", ["exports"], function (exports) {
         dom.insertBoundary(fragment, null);
         return morphs;
       },
-      statements: [["block", "if", [["get", "loaded", ["loc", [null, [19, 6], [19, 12]]]]], [], 0, 1, ["loc", [null, [19, 0], [179, 7]]]]],
+      statements: [["block", "if", [["get", "loaded", ["loc", [null, [19, 6], [19, 12]]]]], [], 0, 1, ["loc", [null, [19, 0], [187, 7]]]]],
       locals: [],
       templates: [child0, child1]
     };
@@ -29820,6 +30295,14 @@ define('tez-ui/utils/download-dag-zip', ['exports', 'ember', 'ember-data'], func
       onItemFail: processFailure,
       retryCount: 3
     }, {
+      url: getUrl('TEZ_DAG_EXTRA_INFO', dagID),
+      context: { name: 'dag-extra-info', type: 'TEZ_DAG_EXTRA_INFO' },
+      onFetch: onFetch,
+      onRetry: onRetry,
+      onItemFetched: processSingleItem,
+      onItemFail: processFailure,
+      retryCount: 3
+    }, {
       url: getUrl('TEZ_DAG_ID', dagID),
       context: { name: 'dag', type: 'TEZ_DAG_ID' },
       onFetch: onFetch,
@@ -30011,6 +30494,14 @@ define('tez-ui/utils/download-dag-zip', ['exports', 'ember', 'ember-data'], func
  * License for the specific language governing permissions and limitations under
  * the License.
  */
+define('tez-ui/utils/facet-types', ['exports', 'em-table/utils/facet-types'], function (exports, _emTableUtilsFacetTypes) {
+  Object.defineProperty(exports, 'default', {
+    enumerable: true,
+    get: function get() {
+      return _emTableUtilsFacetTypes['default'];
+    }
+  });
+});
 define('tez-ui/utils/formatters', ['exports', 'em-helpers/utils/formatters'], function (exports, _emHelpersUtilsFormatters) {
   Object.defineProperty(exports, 'default', {
     enumerable: true,
@@ -30252,6 +30743,14 @@ define("tez-ui/utils/processor", ["exports", "ember"], function (exports, _ember
  * License for the specific language governing permissions and limitations under
  * the License.
  */
+define('tez-ui/utils/sql', ['exports', 'em-table/utils/sql'], function (exports, _emTableUtilsSql) {
+  Object.defineProperty(exports, 'default', {
+    enumerable: true,
+    get: function get() {
+      return _emTableUtilsSql['default'];
+    }
+  });
+});
 define('tez-ui/utils/table-definition', ['exports', 'em-table/utils/table-definition'], function (exports, _emTableUtilsTableDefinition) {
   Object.defineProperty(exports, 'default', {
     enumerable: true,
@@ -30570,11 +31069,11 @@ define('tez-ui/utils/virtual-anchor', ['exports'], function (exports) {
 /* jshint ignore:start */
 
 define('tez-ui/config/environment', ['ember'], function(Ember) {
-  return { 'default': {"modulePrefix":"tez-ui","environment":"production","locationType":"hash","EmberENV":{"FEATURES":{}},"APP":{"buildVersion":"0.7.0.2.6.2.0-205","isStandalone":true,"rowLoadLimit":9007199254740991,"pollingInterval":3000,"hosts":{"timeline":"localhost:8188","rm":"localhost:8088"},"namespaces":{"webService":{"timeline":"ws/v1/timeline","appHistory":"ws/v1/applicationhistory","rm":"ws/v1/cluster","am":"proxy/{app_id}/ws/v{version:2}/tez"},"web":{"rm":"cluster"}},"paths":{"timeline":{"dag":"TEZ_DAG_ID","vertex":"TEZ_VERTEX_ID","task":"TEZ_TASK_ID","attempt":"TEZ_TASK_ATTEMPT_ID","hive-query":"HIVE_QUERY_ID","app":"TEZ_APPLICATION"},"am":{"dag-am":"dagInfo","vertex-am":"verticesInfo","task-am":"tasksInfo","attempt-am":"attemptsInfo"},"rm":{"app-rm":"apps"}},"hrefs":{"help":"https://tez.apache.org/tez_ui_user_data.html","license":"http://www.apache.org/licenses/LICENSE-2.0"},"tables":{"defaultColumns":{"counters":[{"counterName":"FILE_BYTES_READ","counterGroupName":"org.apache.tez.common.counters.FileSystemCounter"},{"counterName":"FILE_BYTES_WRITTEN","counterGroupName":"org.apache.tez.common.counters.FileSystemCounter"},{"counterName":"FILE_READ_OPS","counterGroupName":"org.apache.tez.common.counters.FileSystemCounter"},{"counterName":"FILE_LARGE_READ_OPS","counterGroupName":"org.apache.tez.common.counters.FileSystemCounter"},{"counterName":"FILE_WRITE_OPS","counterGroupName":"org.apache.tez.common.counters.FileSystemCounter"},{"counterName":"HDFS_BYTES_READ","counterGroupName":"org.apache.tez.common.counters.FileSystemCounter"},{"counterName":"HDFS_BYTES_WRITTEN","counterGroupName":"org.apache.tez.common.counters.FileSystemCounter"},{"counterName":"HDFS_READ_OPS","counterGroupName":"org.apache.tez.common.counters.FileSystemCounter"},{"counterName":"HDFS_LARGE_READ_OPS","counterGroupName":"org.apache.tez.common.counters.FileSystemCounter"},{"counterName":"HDFS_WRITE_OPS","counterGroupName":"org.apache.tez.common.counters.FileSystemCounter"},{"counterName":"NUM_SPECULATIONS","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"REDUCE_INPUT_GROUPS","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"REDUCE_INPUT_RECORDS","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"SPLIT_RAW_BYTES","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"COMBINE_INPUT_RECORDS","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"SPILLED_RECORDS","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"NUM_SHUFFLED_INPUTS","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"NUM_SKIPPED_INPUTS","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"NUM_FAILED_SHUFFLE_INPUTS","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"MERGED_MAP_OUTPUTS","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"GC_TIME_MILLIS","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"CPU_MILLISECONDS","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"PHYSICAL_MEMORY_BYTES","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"VIRTUAL_MEMORY_BYTES","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"COMMITTED_HEAP_BYTES","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"INPUT_RECORDS_PROCESSED","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"OUTPUT_RECORDS","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"OUTPUT_LARGE_RECORDS","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"OUTPUT_BYTES","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"OUTPUT_BYTES_WITH_OVERHEAD","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"OUTPUT_BYTES_PHYSICAL","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"ADDITIONAL_SPILLS_BYTES_WRITTEN","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"ADDITIONAL_SPILLS_BYTES_READ","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"ADDITIONAL_SPILL_COUNT","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"SHUFFLE_BYTES","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"SHUFFLE_BYTES_DECOMPRESSED","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"SHUFFLE_BYTES_TO_MEM","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"SHUFFLE_BYTES_TO_DISK","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"SHUFFLE_BYTES_DISK_DIRECT","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"NUM_MEM_TO_DISK_MERGES","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"NUM_DISK_TO_DISK_MERGES","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"SHUFFLE_PHASE_TIME","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"MERGE_PHASE_TIME","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"FIRST_EVENT_RECEIVED","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"LAST_EVENT_RECEIVED","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"CACHE_HIT_BYTES","counterGroupName":"org.apache.hadoop.hive.llap.counters.LlapIOCounters"},{"counterName":"CACHE_MISS_BYTES","counterGroupName":"org.apache.hadoop.hive.llap.counters.LlapIOCounters"},{"counterName":"METADATA_CACHE_HIT","counterGroupName":"org.apache.hadoop.hive.llap.counters.LlapIOCounters"},{"counterName":"METADATA_CACHE_MISS","counterGroupName":"org.apache.hadoop.hive.llap.counters.LlapIOCounters"}],"dagCounters":[{"counterName":"NUM_FAILED_TASKS","counterGroupName":"org.apache.tez.common.counters.DAGCounter"},{"counterName":"NUM_KILLED_TASKS","counterGroupName":"org.apache.tez.common.counters.DAGCounter"},{"counterName":"NUM_SUCCEEDED_TASKS","counterGroupName":"org.apache.tez.common.counters.DAGCounter"},{"counterName":"TOTAL_LAUNCHED_TASKS","counterGroupName":"org.apache.tez.common.counters.DAGCounter"},{"counterName":"OTHER_LOCAL_TASKS","counterGroupName":"org.apache.tez.common.counters.DAGCounter"},{"counterName":"DATA_LOCAL_TASKS","counterGroupName":"org.apache.tez.common.counters.DAGCounter"},{"counterName":"RACK_LOCAL_TASKS","counterGroupName":"org.apache.tez.common.counters.DAGCounter"},{"counterName":"SLOTS_MILLIS_TASKS","counterGroupName":"org.apache.tez.common.counters.DAGCounter"},{"counterName":"FALLOW_SLOTS_MILLIS_TASKS","counterGroupName":"org.apache.tez.common.counters.DAGCounter"},{"counterName":"TOTAL_LAUNCHED_UBERTASKS","counterGroupName":"org.apache.tez.common.counters.DAGCounter"},{"counterName":"NUM_UBER_SUBTASKS","counterGroupName":"org.apache.tez.common.counters.DAGCounter"},{"counterName":"NUM_FAILED_UBERTASKS","counterGroupName":"org.apache.tez.common.counters.DAGCounter"},{"counterName":"REDUCE_OUTPUT_RECORDS","counterGroupName":"REDUCE_OUTPUT_RECORDS"},{"counterName":"REDUCE_SKIPPED_GROUPS","counterGroupName":"REDUCE_SKIPPED_GROUPS"},{"counterName":"REDUCE_SKIPPED_RECORDS","counterGroupName":"REDUCE_SKIPPED_RECORDS"},{"counterName":"COMBINE_OUTPUT_RECORDS","counterGroupName":"COMBINE_OUTPUT_RECORDS"},{"counterName":"SKIPPED_RECORDS","counterGroupName":"SKIPPED_RECORDS"},{"counterName":"INPUT_GROUPS","counterGroupName":"INPUT_GROUPS"}]}},"name":"tez-ui","version":"0.2.0+07380b58"},"contentSecurityPolicy":{"connect-src":"* 'self'","child-src":"'self' 'unsafe-inline'","style-src":"'self' 'unsafe-inline'","script-src":"'self' 'unsafe-inline'","default-src":"'none'","font-src":"'self'","img-src":"'self'","media-src":"'self'"},"contentSecurityPolicyHeader":"Content-Security-Policy-Report-Only","exportApplicationGlobal":false,"moment":{"includeTimezone":"2010-2020"}}};
+  return { 'default': {"modulePrefix":"tez-ui","environment":"production","locationType":"hash","EmberENV":{"FEATURES":{}},"APP":{"buildVersion":"0.9.2","isStandalone":true,"rowLoadLimit":9007199254740991,"pollingInterval":3000,"hosts":{"timeline":"localhost:8188","rm":"localhost:8088"},"namespaces":{"webService":{"timeline":"ws/v1/timeline","appHistory":"ws/v1/applicationhistory","rm":"ws/v1/cluster","am":"proxy/{app_id}/ws/v{version:2}/tez"},"web":{"rm":"cluster"}},"paths":{"timeline":{"dag":"TEZ_DAG_ID","vertex":"TEZ_VERTEX_ID","task":"TEZ_TASK_ID","attempt":"TEZ_TASK_ATTEMPT_ID","dag-info":"TEZ_DAG_EXTRA_INFO","hive-query":"HIVE_QUERY_ID","app":"TEZ_APPLICATION"},"am":{"dag-am":"dagInfo","vertex-am":"verticesInfo","task-am":"tasksInfo","attempt-am":"attemptsInfo"},"rm":{"app-rm":"apps"}},"hrefs":{"help":"https://tez.apache.org/tez_ui_user_data.html","license":"http://www.apache.org/licenses/LICENSE-2.0"},"tables":{"defaultColumns":{"counters":[{"counterName":"FILE_BYTES_READ","counterGroupName":"org.apache.tez.common.counters.FileSystemCounter"},{"counterName":"FILE_BYTES_WRITTEN","counterGroupName":"org.apache.tez.common.counters.FileSystemCounter"},{"counterName":"FILE_READ_OPS","counterGroupName":"org.apache.tez.common.counters.FileSystemCounter"},{"counterName":"FILE_LARGE_READ_OPS","counterGroupName":"org.apache.tez.common.counters.FileSystemCounter"},{"counterName":"FILE_WRITE_OPS","counterGroupName":"org.apache.tez.common.counters.FileSystemCounter"},{"counterName":"HDFS_BYTES_READ","counterGroupName":"org.apache.tez.common.counters.FileSystemCounter"},{"counterName":"HDFS_BYTES_WRITTEN","counterGroupName":"org.apache.tez.common.counters.FileSystemCounter"},{"counterName":"HDFS_READ_OPS","counterGroupName":"org.apache.tez.common.counters.FileSystemCounter"},{"counterName":"HDFS_LARGE_READ_OPS","counterGroupName":"org.apache.tez.common.counters.FileSystemCounter"},{"counterName":"HDFS_WRITE_OPS","counterGroupName":"org.apache.tez.common.counters.FileSystemCounter"},{"counterName":"WASB_BYTES_READ","counterGroupName":"org.apache.tez.common.counters.FileSystemCounter"},{"counterName":"WASB_BYTES_WRITTEN","counterGroupName":"org.apache.tez.common.counters.FileSystemCounter"},{"counterName":"ADL_BYTES_READ","counterGroupName":"org.apache.tez.common.counters.FileSystemCounter"},{"counterName":"ADL_BYTES_WRITTEN","counterGroupName":"org.apache.tez.common.counters.FileSystemCounter"},{"counterName":"NUM_SPECULATIONS","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"REDUCE_INPUT_GROUPS","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"REDUCE_INPUT_RECORDS","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"SPLIT_RAW_BYTES","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"COMBINE_INPUT_RECORDS","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"SPILLED_RECORDS","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"NUM_SHUFFLED_INPUTS","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"NUM_SKIPPED_INPUTS","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"NUM_FAILED_SHUFFLE_INPUTS","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"MERGED_MAP_OUTPUTS","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"GC_TIME_MILLIS","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"CPU_MILLISECONDS","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"PHYSICAL_MEMORY_BYTES","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"VIRTUAL_MEMORY_BYTES","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"COMMITTED_HEAP_BYTES","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"INPUT_RECORDS_PROCESSED","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"OUTPUT_RECORDS","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"OUTPUT_LARGE_RECORDS","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"OUTPUT_BYTES","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"OUTPUT_BYTES_WITH_OVERHEAD","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"OUTPUT_BYTES_PHYSICAL","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"ADDITIONAL_SPILLS_BYTES_WRITTEN","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"ADDITIONAL_SPILLS_BYTES_READ","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"ADDITIONAL_SPILL_COUNT","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"SHUFFLE_BYTES","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"SHUFFLE_BYTES_DECOMPRESSED","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"SHUFFLE_BYTES_TO_MEM","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"SHUFFLE_BYTES_TO_DISK","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"SHUFFLE_BYTES_DISK_DIRECT","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"NUM_MEM_TO_DISK_MERGES","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"NUM_DISK_TO_DISK_MERGES","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"SHUFFLE_PHASE_TIME","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"MERGE_PHASE_TIME","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"FIRST_EVENT_RECEIVED","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"LAST_EVENT_RECEIVED","counterGroupName":"org.apache.tez.common.counters.TaskCounter"}],"dagCounters":[{"counterName":"NUM_FAILED_TASKS","counterGroupName":"org.apache.tez.common.counters.DAGCounter"},{"counterName":"NUM_KILLED_TASKS","counterGroupName":"org.apache.tez.common.counters.DAGCounter"},{"counterName":"NUM_SUCCEEDED_TASKS","counterGroupName":"org.apache.tez.common.counters.DAGCounter"},{"counterName":"TOTAL_LAUNCHED_TASKS","counterGroupName":"org.apache.tez.common.counters.DAGCounter"},{"counterName":"OTHER_LOCAL_TASKS","counterGroupName":"org.apache.tez.common.counters.DAGCounter"},{"counterName":"DATA_LOCAL_TASKS","counterGroupName":"org.apache.tez.common.counters.DAGCounter"},{"counterName":"RACK_LOCAL_TASKS","counterGroupName":"org.apache.tez.common.counters.DAGCounter"},{"counterName":"SLOTS_MILLIS_TASKS","counterGroupName":"org.apache.tez.common.counters.DAGCounter"},{"counterName":"FALLOW_SLOTS_MILLIS_TASKS","counterGroupName":"org.apache.tez.common.counters.DAGCounter"},{"counterName":"TOTAL_LAUNCHED_UBERTASKS","counterGroupName":"org.apache.tez.common.counters.DAGCounter"},{"counterName":"NUM_UBER_SUBTASKS","counterGroupName":"org.apache.tez.common.counters.DAGCounter"},{"counterName":"NUM_FAILED_UBERTASKS","counterGroupName":"org.apache.tez.common.counters.DAGCounter"},{"counterName":"REDUCE_OUTPUT_RECORDS","counterGroupName":"REDUCE_OUTPUT_RECORDS"},{"counterName":"REDUCE_SKIPPED_GROUPS","counterGroupName":"REDUCE_SKIPPED_GROUPS"},{"counterName":"REDUCE_SKIPPED_RECORDS","counterGroupName":"REDUCE_SKIPPED_RECORDS"},{"counterName":"COMBINE_OUTPUT_RECORDS","counterGroupName":"COMBINE_OUTPUT_RECORDS"},{"counterName":"SKIPPED_RECORDS","counterGroupName":"SKIPPED_RECORDS"},{"counterName":"INPUT_GROUPS","counterGroupName":"INPUT_GROUPS"}]}},"name":"tez-ui","version":"0.2.0+10cb3519"},"contentSecurityPolicy":{"connect-src":"* 'self'","child-src":"'self' 'unsafe-inline'","style-src":"'self' 'unsafe-inline'","script-src":"'self' 'unsafe-inline'","default-src":"'none'","font-src":"'self'","img-src":"'self'","media-src":"'self'"},"contentSecurityPolicyHeader":"Content-Security-Policy-Report-Only","exportApplicationGlobal":false,"moment":{"includeTimezone":"2010-2020"}}};
 });
 
 if (!runningTests) {
-  require("tez-ui/app")["default"].create({"buildVersion":"0.7.0.2.6.2.0-205","isStandalone":true,"rowLoadLimit":9007199254740991,"pollingInterval":3000,"hosts":{"timeline":"localhost:8188","rm":"localhost:8088"},"namespaces":{"webService":{"timeline":"ws/v1/timeline","appHistory":"ws/v1/applicationhistory","rm":"ws/v1/cluster","am":"proxy/{app_id}/ws/v{version:2}/tez"},"web":{"rm":"cluster"}},"paths":{"timeline":{"dag":"TEZ_DAG_ID","vertex":"TEZ_VERTEX_ID","task":"TEZ_TASK_ID","attempt":"TEZ_TASK_ATTEMPT_ID","hive-query":"HIVE_QUERY_ID","app":"TEZ_APPLICATION"},"am":{"dag-am":"dagInfo","vertex-am":"verticesInfo","task-am":"tasksInfo","attempt-am":"attemptsInfo"},"rm":{"app-rm":"apps"}},"hrefs":{"help":"https://tez.apache.org/tez_ui_user_data.html","license":"http://www.apache.org/licenses/LICENSE-2.0"},"tables":{"defaultColumns":{"counters":[{"counterName":"FILE_BYTES_READ","counterGroupName":"org.apache.tez.common.counters.FileSystemCounter"},{"counterName":"FILE_BYTES_WRITTEN","counterGroupName":"org.apache.tez.common.counters.FileSystemCounter"},{"counterName":"FILE_READ_OPS","counterGroupName":"org.apache.tez.common.counters.FileSystemCounter"},{"counterName":"FILE_LARGE_READ_OPS","counterGroupName":"org.apache.tez.common.counters.FileSystemCounter"},{"counterName":"FILE_WRITE_OPS","counterGroupName":"org.apache.tez.common.counters.FileSystemCounter"},{"counterName":"HDFS_BYTES_READ","counterGroupName":"org.apache.tez.common.counters.FileSystemCounter"},{"counterName":"HDFS_BYTES_WRITTEN","counterGroupName":"org.apache.tez.common.counters.FileSystemCounter"},{"counterName":"HDFS_READ_OPS","counterGroupName":"org.apache.tez.common.counters.FileSystemCounter"},{"counterName":"HDFS_LARGE_READ_OPS","counterGroupName":"org.apache.tez.common.counters.FileSystemCounter"},{"counterName":"HDFS_WRITE_OPS","counterGroupName":"org.apache.tez.common.counters.FileSystemCounter"},{"counterName":"NUM_SPECULATIONS","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"REDUCE_INPUT_GROUPS","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"REDUCE_INPUT_RECORDS","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"SPLIT_RAW_BYTES","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"COMBINE_INPUT_RECORDS","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"SPILLED_RECORDS","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"NUM_SHUFFLED_INPUTS","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"NUM_SKIPPED_INPUTS","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"NUM_FAILED_SHUFFLE_INPUTS","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"MERGED_MAP_OUTPUTS","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"GC_TIME_MILLIS","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"CPU_MILLISECONDS","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"PHYSICAL_MEMORY_BYTES","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"VIRTUAL_MEMORY_BYTES","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"COMMITTED_HEAP_BYTES","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"INPUT_RECORDS_PROCESSED","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"OUTPUT_RECORDS","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"OUTPUT_LARGE_RECORDS","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"OUTPUT_BYTES","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"OUTPUT_BYTES_WITH_OVERHEAD","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"OUTPUT_BYTES_PHYSICAL","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"ADDITIONAL_SPILLS_BYTES_WRITTEN","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"ADDITIONAL_SPILLS_BYTES_READ","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"ADDITIONAL_SPILL_COUNT","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"SHUFFLE_BYTES","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"SHUFFLE_BYTES_DECOMPRESSED","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"SHUFFLE_BYTES_TO_MEM","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"SHUFFLE_BYTES_TO_DISK","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"SHUFFLE_BYTES_DISK_DIRECT","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"NUM_MEM_TO_DISK_MERGES","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"NUM_DISK_TO_DISK_MERGES","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"SHUFFLE_PHASE_TIME","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"MERGE_PHASE_TIME","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"FIRST_EVENT_RECEIVED","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"LAST_EVENT_RECEIVED","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"CACHE_HIT_BYTES","counterGroupName":"org.apache.hadoop.hive.llap.counters.LlapIOCounters"},{"counterName":"CACHE_MISS_BYTES","counterGroupName":"org.apache.hadoop.hive.llap.counters.LlapIOCounters"},{"counterName":"METADATA_CACHE_HIT","counterGroupName":"org.apache.hadoop.hive.llap.counters.LlapIOCounters"},{"counterName":"METADATA_CACHE_MISS","counterGroupName":"org.apache.hadoop.hive.llap.counters.LlapIOCounters"}],"dagCounters":[{"counterName":"NUM_FAILED_TASKS","counterGroupName":"org.apache.tez.common.counters.DAGCounter"},{"counterName":"NUM_KILLED_TASKS","counterGroupName":"org.apache.tez.common.counters.DAGCounter"},{"counterName":"NUM_SUCCEEDED_TASKS","counterGroupName":"org.apache.tez.common.counters.DAGCounter"},{"counterName":"TOTAL_LAUNCHED_TASKS","counterGroupName":"org.apache.tez.common.counters.DAGCounter"},{"counterName":"OTHER_LOCAL_TASKS","counterGroupName":"org.apache.tez.common.counters.DAGCounter"},{"counterName":"DATA_LOCAL_TASKS","counterGroupName":"org.apache.tez.common.counters.DAGCounter"},{"counterName":"RACK_LOCAL_TASKS","counterGroupName":"org.apache.tez.common.counters.DAGCounter"},{"counterName":"SLOTS_MILLIS_TASKS","counterGroupName":"org.apache.tez.common.counters.DAGCounter"},{"counterName":"FALLOW_SLOTS_MILLIS_TASKS","counterGroupName":"org.apache.tez.common.counters.DAGCounter"},{"counterName":"TOTAL_LAUNCHED_UBERTASKS","counterGroupName":"org.apache.tez.common.counters.DAGCounter"},{"counterName":"NUM_UBER_SUBTASKS","counterGroupName":"org.apache.tez.common.counters.DAGCounter"},{"counterName":"NUM_FAILED_UBERTASKS","counterGroupName":"org.apache.tez.common.counters.DAGCounter"},{"counterName":"REDUCE_OUTPUT_RECORDS","counterGroupName":"REDUCE_OUTPUT_RECORDS"},{"counterName":"REDUCE_SKIPPED_GROUPS","counterGroupName":"REDUCE_SKIPPED_GROUPS"},{"counterName":"REDUCE_SKIPPED_RECORDS","counterGroupName":"REDUCE_SKIPPED_RECORDS"},{"counterName":"COMBINE_OUTPUT_RECORDS","counterGroupName":"COMBINE_OUTPUT_RECORDS"},{"counterName":"SKIPPED_RECORDS","counterGroupName":"SKIPPED_RECORDS"},{"counterName":"INPUT_GROUPS","counterGroupName":"INPUT_GROUPS"}]}},"name":"tez-ui","version":"0.2.0+07380b58"});
+  require("tez-ui/app")["default"].create({"buildVersion":"0.9.2","isStandalone":true,"rowLoadLimit":9007199254740991,"pollingInterval":3000,"hosts":{"timeline":"localhost:8188","rm":"localhost:8088"},"namespaces":{"webService":{"timeline":"ws/v1/timeline","appHistory":"ws/v1/applicationhistory","rm":"ws/v1/cluster","am":"proxy/{app_id}/ws/v{version:2}/tez"},"web":{"rm":"cluster"}},"paths":{"timeline":{"dag":"TEZ_DAG_ID","vertex":"TEZ_VERTEX_ID","task":"TEZ_TASK_ID","attempt":"TEZ_TASK_ATTEMPT_ID","dag-info":"TEZ_DAG_EXTRA_INFO","hive-query":"HIVE_QUERY_ID","app":"TEZ_APPLICATION"},"am":{"dag-am":"dagInfo","vertex-am":"verticesInfo","task-am":"tasksInfo","attempt-am":"attemptsInfo"},"rm":{"app-rm":"apps"}},"hrefs":{"help":"https://tez.apache.org/tez_ui_user_data.html","license":"http://www.apache.org/licenses/LICENSE-2.0"},"tables":{"defaultColumns":{"counters":[{"counterName":"FILE_BYTES_READ","counterGroupName":"org.apache.tez.common.counters.FileSystemCounter"},{"counterName":"FILE_BYTES_WRITTEN","counterGroupName":"org.apache.tez.common.counters.FileSystemCounter"},{"counterName":"FILE_READ_OPS","counterGroupName":"org.apache.tez.common.counters.FileSystemCounter"},{"counterName":"FILE_LARGE_READ_OPS","counterGroupName":"org.apache.tez.common.counters.FileSystemCounter"},{"counterName":"FILE_WRITE_OPS","counterGroupName":"org.apache.tez.common.counters.FileSystemCounter"},{"counterName":"HDFS_BYTES_READ","counterGroupName":"org.apache.tez.common.counters.FileSystemCounter"},{"counterName":"HDFS_BYTES_WRITTEN","counterGroupName":"org.apache.tez.common.counters.FileSystemCounter"},{"counterName":"HDFS_READ_OPS","counterGroupName":"org.apache.tez.common.counters.FileSystemCounter"},{"counterName":"HDFS_LARGE_READ_OPS","counterGroupName":"org.apache.tez.common.counters.FileSystemCounter"},{"counterName":"HDFS_WRITE_OPS","counterGroupName":"org.apache.tez.common.counters.FileSystemCounter"},{"counterName":"WASB_BYTES_READ","counterGroupName":"org.apache.tez.common.counters.FileSystemCounter"},{"counterName":"WASB_BYTES_WRITTEN","counterGroupName":"org.apache.tez.common.counters.FileSystemCounter"},{"counterName":"ADL_BYTES_READ","counterGroupName":"org.apache.tez.common.counters.FileSystemCounter"},{"counterName":"ADL_BYTES_WRITTEN","counterGroupName":"org.apache.tez.common.counters.FileSystemCounter"},{"counterName":"NUM_SPECULATIONS","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"REDUCE_INPUT_GROUPS","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"REDUCE_INPUT_RECORDS","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"SPLIT_RAW_BYTES","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"COMBINE_INPUT_RECORDS","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"SPILLED_RECORDS","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"NUM_SHUFFLED_INPUTS","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"NUM_SKIPPED_INPUTS","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"NUM_FAILED_SHUFFLE_INPUTS","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"MERGED_MAP_OUTPUTS","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"GC_TIME_MILLIS","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"CPU_MILLISECONDS","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"PHYSICAL_MEMORY_BYTES","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"VIRTUAL_MEMORY_BYTES","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"COMMITTED_HEAP_BYTES","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"INPUT_RECORDS_PROCESSED","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"OUTPUT_RECORDS","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"OUTPUT_LARGE_RECORDS","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"OUTPUT_BYTES","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"OUTPUT_BYTES_WITH_OVERHEAD","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"OUTPUT_BYTES_PHYSICAL","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"ADDITIONAL_SPILLS_BYTES_WRITTEN","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"ADDITIONAL_SPILLS_BYTES_READ","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"ADDITIONAL_SPILL_COUNT","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"SHUFFLE_BYTES","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"SHUFFLE_BYTES_DECOMPRESSED","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"SHUFFLE_BYTES_TO_MEM","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"SHUFFLE_BYTES_TO_DISK","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"SHUFFLE_BYTES_DISK_DIRECT","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"NUM_MEM_TO_DISK_MERGES","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"NUM_DISK_TO_DISK_MERGES","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"SHUFFLE_PHASE_TIME","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"MERGE_PHASE_TIME","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"FIRST_EVENT_RECEIVED","counterGroupName":"org.apache.tez.common.counters.TaskCounter"},{"counterName":"LAST_EVENT_RECEIVED","counterGroupName":"org.apache.tez.common.counters.TaskCounter"}],"dagCounters":[{"counterName":"NUM_FAILED_TASKS","counterGroupName":"org.apache.tez.common.counters.DAGCounter"},{"counterName":"NUM_KILLED_TASKS","counterGroupName":"org.apache.tez.common.counters.DAGCounter"},{"counterName":"NUM_SUCCEEDED_TASKS","counterGroupName":"org.apache.tez.common.counters.DAGCounter"},{"counterName":"TOTAL_LAUNCHED_TASKS","counterGroupName":"org.apache.tez.common.counters.DAGCounter"},{"counterName":"OTHER_LOCAL_TASKS","counterGroupName":"org.apache.tez.common.counters.DAGCounter"},{"counterName":"DATA_LOCAL_TASKS","counterGroupName":"org.apache.tez.common.counters.DAGCounter"},{"counterName":"RACK_LOCAL_TASKS","counterGroupName":"org.apache.tez.common.counters.DAGCounter"},{"counterName":"SLOTS_MILLIS_TASKS","counterGroupName":"org.apache.tez.common.counters.DAGCounter"},{"counterName":"FALLOW_SLOTS_MILLIS_TASKS","counterGroupName":"org.apache.tez.common.counters.DAGCounter"},{"counterName":"TOTAL_LAUNCHED_UBERTASKS","counterGroupName":"org.apache.tez.common.counters.DAGCounter"},{"counterName":"NUM_UBER_SUBTASKS","counterGroupName":"org.apache.tez.common.counters.DAGCounter"},{"counterName":"NUM_FAILED_UBERTASKS","counterGroupName":"org.apache.tez.common.counters.DAGCounter"},{"counterName":"REDUCE_OUTPUT_RECORDS","counterGroupName":"REDUCE_OUTPUT_RECORDS"},{"counterName":"REDUCE_SKIPPED_GROUPS","counterGroupName":"REDUCE_SKIPPED_GROUPS"},{"counterName":"REDUCE_SKIPPED_RECORDS","counterGroupName":"REDUCE_SKIPPED_RECORDS"},{"counterName":"COMBINE_OUTPUT_RECORDS","counterGroupName":"COMBINE_OUTPUT_RECORDS"},{"counterName":"SKIPPED_RECORDS","counterGroupName":"SKIPPED_RECORDS"},{"counterName":"INPUT_GROUPS","counterGroupName":"INPUT_GROUPS"}]}},"name":"tez-ui","version":"0.2.0+10cb3519"});
 }
 
 /* jshint ignore:end */

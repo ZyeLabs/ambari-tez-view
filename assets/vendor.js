@@ -7,6 +7,319 @@ var runningTests = false;
 
 /* jshint ignore:end */
 
+;var loader, define, requireModule, require, requirejs;
+
+(function (global) {
+  'use strict';
+
+  var heimdall = global.heimdall;
+
+  function dict() {
+    var obj = Object.create(null);
+    obj['__'] = undefined;
+    delete obj['__'];
+    return obj;
+  }
+
+  // Save off the original values of these globals, so we can restore them if someone asks us to
+  var oldGlobals = {
+    loader: loader,
+    define: define,
+    requireModule: requireModule,
+    require: require,
+    requirejs: requirejs
+  };
+
+  requirejs = require = requireModule = function (name) {
+    var pending = [];
+    var mod = findModule(name, '(require)', pending);
+
+    for (var i = pending.length - 1; i >= 0; i--) {
+      pending[i].exports();
+    }
+
+    return mod.module.exports;
+  };
+
+  loader = {
+    noConflict: function (aliases) {
+      var oldName, newName;
+
+      for (oldName in aliases) {
+        if (aliases.hasOwnProperty(oldName)) {
+          if (oldGlobals.hasOwnProperty(oldName)) {
+            newName = aliases[oldName];
+
+            global[newName] = global[oldName];
+            global[oldName] = oldGlobals[oldName];
+          }
+        }
+      }
+    }
+  };
+
+  var _isArray;
+  if (!Array.isArray) {
+    _isArray = function (x) {
+      return Object.prototype.toString.call(x) === '[object Array]';
+    };
+  } else {
+    _isArray = Array.isArray;
+  }
+
+  var registry = dict();
+  var seen = dict();
+
+  var uuid = 0;
+
+  function unsupportedModule(length) {
+    throw new Error('an unsupported module was defined, expected `define(name, deps, module)` instead got: `' + length + '` arguments to define`');
+  }
+
+  var defaultDeps = ['require', 'exports', 'module'];
+
+  function Module(name, deps, callback, alias) {
+    this.id = uuid++;
+    this.name = name;
+    this.deps = !deps.length && callback.length ? defaultDeps : deps;
+    this.module = { exports: {} };
+    this.callback = callback;
+    this.hasExportsAsDep = false;
+    this.isAlias = alias;
+    this.reified = new Array(deps.length);
+
+    /*
+       Each module normally passes through these states, in order:
+         new       : initial state
+         pending   : this module is scheduled to be executed
+         reifying  : this module's dependencies are being executed
+         reified   : this module's dependencies finished executing successfully
+         errored   : this module's dependencies failed to execute
+         finalized : this module executed successfully
+     */
+    this.state = 'new';
+  }
+
+  Module.prototype.makeDefaultExport = function () {
+    var exports = this.module.exports;
+    if (exports !== null && (typeof exports === 'object' || typeof exports === 'function') && exports['default'] === undefined && Object.isExtensible(exports)) {
+      exports['default'] = exports;
+    }
+  };
+
+  Module.prototype.exports = function () {
+    // if finalized, there is no work to do. If reifying, there is a
+    // circular dependency so we must return our (partial) exports.
+    if (this.state === 'finalized' || this.state === 'reifying') {
+      return this.module.exports;
+    }
+
+    if (loader.wrapModules) {
+      this.callback = loader.wrapModules(this.name, this.callback);
+    }
+
+    this.reify();
+
+    var result = this.callback.apply(this, this.reified);
+    this.state = 'finalized';
+
+    if (!(this.hasExportsAsDep && result === undefined)) {
+      this.module.exports = result;
+    }
+    this.makeDefaultExport();
+    return this.module.exports;
+  };
+
+  Module.prototype.unsee = function () {
+    this.state = 'new';
+    this.module = { exports: {} };
+  };
+
+  Module.prototype.reify = function () {
+    if (this.state === 'reified') {
+      return;
+    }
+    this.state = 'reifying';
+    try {
+      this.reified = this._reify();
+      this.state = 'reified';
+    } finally {
+      if (this.state === 'reifying') {
+        this.state = 'errored';
+      }
+    }
+  };
+
+  Module.prototype._reify = function () {
+    var reified = this.reified.slice();
+    for (var i = 0; i < reified.length; i++) {
+      var mod = reified[i];
+      reified[i] = mod.exports ? mod.exports : mod.module.exports();
+    }
+    return reified;
+  };
+
+  Module.prototype.findDeps = function (pending) {
+    if (this.state !== 'new') {
+      return;
+    }
+
+    this.state = 'pending';
+
+    var deps = this.deps;
+
+    for (var i = 0; i < deps.length; i++) {
+      var dep = deps[i];
+      var entry = this.reified[i] = { exports: undefined, module: undefined };
+      if (dep === 'exports') {
+        this.hasExportsAsDep = true;
+        entry.exports = this.module.exports;
+      } else if (dep === 'require') {
+        entry.exports = this.makeRequire();
+      } else if (dep === 'module') {
+        entry.exports = this.module;
+      } else {
+        entry.module = findModule(resolve(dep, this.name), this.name, pending);
+      }
+    }
+  };
+
+  Module.prototype.makeRequire = function () {
+    var name = this.name;
+    var r = function (dep) {
+      return require(resolve(dep, name));
+    };
+    r['default'] = r;
+    r.has = function (dep) {
+      return has(resolve(dep, name));
+    };
+    return r;
+  };
+
+  define = function (name, deps, callback) {
+    var module = registry[name];
+
+    // If a module for this name has already been defined and is in any state
+    // other than `new` (meaning it has been or is currently being required),
+    // then we return early to avoid redefinition.
+    if (module && module.state !== 'new') {
+      return;
+    }
+
+    if (arguments.length < 2) {
+      unsupportedModule(arguments.length);
+    }
+
+    if (!_isArray(deps)) {
+      callback = deps;
+      deps = [];
+    }
+
+    if (callback instanceof Alias) {
+      registry[name] = new Module(callback.name, deps, callback, true);
+    } else {
+      registry[name] = new Module(name, deps, callback, false);
+    }
+  };
+
+  // we don't support all of AMD
+  // define.amd = {};
+
+  function Alias(path) {
+    this.name = path;
+  }
+
+  define.alias = function (path) {
+    return new Alias(path);
+  };
+
+  function missingModule(name, referrer) {
+    throw new Error('Could not find module `' + name + '` imported from `' + referrer + '`');
+  }
+
+  function findModule(name, referrer, pending) {
+    var mod = registry[name] || registry[name + '/index'];
+
+    while (mod && mod.isAlias) {
+      mod = registry[mod.name];
+    }
+
+    if (!mod) {
+      missingModule(name, referrer);
+    }
+
+    if (pending && mod.state !== 'pending' && mod.state !== 'finalized') {
+      mod.findDeps(pending);
+      pending.push(mod);
+    }
+    return mod;
+  }
+
+  function resolve(child, name) {
+    if (child.charAt(0) !== '.') {
+      return child;
+    }
+
+    var parts = child.split('/');
+    var nameParts = name.split('/');
+    var parentBase = nameParts.slice(0, -1);
+
+    for (var i = 0, l = parts.length; i < l; i++) {
+      var part = parts[i];
+
+      if (part === '..') {
+        if (parentBase.length === 0) {
+          throw new Error('Cannot access parent module of root');
+        }
+        parentBase.pop();
+      } else if (part === '.') {
+        continue;
+      } else {
+        parentBase.push(part);
+      }
+    }
+
+    return parentBase.join('/');
+  }
+
+  function has(name) {
+    return !!(registry[name] || registry[name + '/index']);
+  }
+
+  requirejs.entries = requirejs._eak_seen = registry;
+  requirejs.has = has;
+  requirejs.unsee = function (moduleName) {
+    findModule(moduleName, '(unsee)', false).unsee();
+  };
+
+  requirejs.clear = function () {
+    requirejs.entries = requirejs._eak_seen = registry = dict();
+    seen = dict();
+  };
+
+  // This code primes the JS engine for good performance by warming the
+  // JIT compiler for these functions.
+  define('foo', function () {});
+  define('foo/bar', [], function () {});
+  define('foo/asdf', ['module', 'exports', 'require'], function (module, exports, require) {
+    if (require.has('foo/bar')) {
+      require('foo/bar');
+    }
+  });
+  define('foo/baz', [], define.alias('foo'));
+  define('foo/quz', define.alias('foo'));
+  define('foo/bar', ['foo', './quz', './baz', './asdf', './bar', '../foo'], function () {});
+  define('foo/main', ['foo/bar'], function () {});
+
+  require('foo/main');
+  require.unsee('foo/bar');
+
+  requirejs.clear();
+
+  if (typeof exports === 'object' && typeof module === 'object' && module.exports) {
+    module.exports = { require: require, define: define };
+  }
+})(this);
 ;//! moment.js
 //! version : 2.12.0
 //! authors : Tim Wood, Iskren Chernev, Moment.js contributors
@@ -97033,7 +97346,9 @@ return $.widget( "ui.tooltip", {
  * More.js - Distributable
  */
 
-var MoreString = {
+var MoreString, MoreObject, MoreArray;
+
+MoreString = {
   /*
    * Replaces the patterns in current string with the given values.
    * Pattern can be {} or {argumentIndex} or {keyName}. {} will be replaced in the order of arguments.
@@ -97107,7 +97422,7 @@ var MoreString = {
   }
 };
 
-var MoreObject = {
+MoreObject = {
 
   /*
    * Returns type of an object as a string
@@ -97341,8 +97656,7 @@ var MoreObject = {
 
     MoreObject.keys(sourceObject).forEach(function (key) {
       var targetVal = targetObject[key],
-          sourceVal = sourceObject[key],
-          MoreArray;
+          sourceVal = sourceObject[key];
 
       if(MoreObject.isPlainObject(targetVal) && MoreObject.isPlainObject(sourceVal)) {
         MoreObject.merge(targetVal, sourceVal, appendArray);
@@ -97375,7 +97689,7 @@ var MoreObject = {
   }
 };
 
-var MoreArray = {
+MoreArray = {
 
   /*
    * Returns the first element in the array
@@ -109438,10 +109752,17 @@ define('em-table/components/em-table-column', ['exports', 'ember', 'em-table/tem
     defaultWidth: "",
 
     classNames: ['table-column'],
-    classNameBindings: ['inner'],
+    classNameBindings: ['inner', 'extraClassNames'],
 
     inner: _ember['default'].computed('index', function () {
       return !!this.get('index');
+    }),
+
+    extraClassNames: _ember['default'].computed("definition.classNames", function () {
+      var classNames = this.get("definition.classNames");
+      if (classNames) {
+        return classNames.join(" ");
+      }
     }),
 
     didInsertElement: function didInsertElement() {
@@ -109456,7 +109777,11 @@ define('em-table/components/em-table-column', ['exports', 'ember', 'em-table/tem
     }),
 
     setWidth: _ember['default'].observer("adjustedWidth", "defaultWidth", function () {
-      this.$().css("width", this.get('adjustedWidth') || this.get('defaultWidth'));
+      var thisElement = this.$();
+      thisElement.css("width", this.get('adjustedWidth') || this.get('defaultWidth'));
+      _ember['default'].run.scheduleOnce('afterRender', this, function () {
+        this.get('parentView').send('columnWidthChanged', thisElement.width(), this.get("definition"), this.get("index"));
+      });
     }),
 
     _onColResize: function _onColResize(event) {
@@ -109467,7 +109792,7 @@ define('em-table/components/em-table-column', ['exports', 'ember', 'em-table/tem
         data.startEvent = event;
       }
 
-      width = data.startWidth + event.clientX - data.startEvent.clientX + 'px';
+      width = data.startWidth + event.clientX - data.startEvent.clientX;
       data.thisObj.set('adjustedWidth', width);
     },
 
@@ -109498,6 +109823,216 @@ define('em-table/components/em-table-column', ['exports', 'ember', 'em-table/tem
 
         _ember['default'].$(document).on('mousemove', mouseTracker, this._onColResize);
         _ember['default'].$(document).on('mouseup', mouseTracker, this._endColResize);
+      }
+    }
+  });
+});
+define('em-table/components/em-table-facet-panel-values', ['exports', 'ember', 'em-table/templates/components/em-table-facet-panel-values'], function (exports, _ember, _emTableTemplatesComponentsEmTableFacetPanelValues) {
+  'use strict';
+
+  var LIST_LIMIT = 7;
+
+  exports['default'] = _ember['default'].Component.extend({
+    layout: _emTableTemplatesComponentsEmTableFacetPanelValues['default'],
+
+    data: null,
+    checkedCount: null,
+
+    tableDefinition: null,
+    dataProcessor: null,
+
+    tmpFacetConditions: null,
+
+    hideValues: true,
+    limitList: true,
+
+    classNames: ['em-table-facet-panel-values'],
+    classNameBindings: ['hideValues', 'limitList', 'hideFilter', 'hideMoreLess', 'hideSelectAll'],
+
+    filterText: null,
+    isVisible: _ember['default'].computed("data.facets.length", "tableDefinition.minValuesToDisplay", function () {
+      return this.get("data.facets.length") >= this.get("tableDefinition.minValuesToDisplay");
+    }),
+    hideFilter: _ember['default'].computed("allFacets.length", function () {
+      return this.get("allFacets.length") < LIST_LIMIT;
+    }),
+    hideMoreLess: _ember['default'].computed("filteredFacets.length", function () {
+      return this.get("filteredFacets.length") < LIST_LIMIT;
+    }),
+    hideSelectAll: _ember['default'].computed("fieldFacetConditions", "checkedCount", "data.facets", function () {
+      return this.get("fieldFacetConditions.in.length") === this.get("data.facets.length");
+    }),
+
+    fieldFacetConditions: _ember['default'].computed("tmpFacetConditions", "data.column.id", function () {
+      var columnID = this.get("data.column.id"),
+          conditions = this.get('tmpFacetConditions.' + columnID),
+          facets = this.get("data.facets") || [];
+
+      if (!conditions) {
+        conditions = {
+          'in': facets.map(function (facet) {
+            return facet.value;
+          })
+        };
+        this.set('tmpFacetConditions.' + columnID, conditions);
+      }
+
+      return conditions;
+    }),
+
+    allFacets: _ember['default'].computed("data.facets", "fieldFacetConditions", function () {
+      var facets = this.get("data.facets") || [],
+          checkedValues = this.get("fieldFacetConditions.in"),
+          selectionHash = {};
+
+      if (checkedValues) {
+        checkedValues.forEach(function (valueText) {
+          selectionHash[valueText] = 1;
+        });
+      }
+
+      return _ember['default'].A(facets.map(function (facet) {
+        facet = _ember['default'].Object.create(facet);
+        facet.set("checked", selectionHash[facet.value]);
+        return facet;
+      }));
+    }),
+
+    filteredFacets: _ember['default'].computed("allFacets", "filterText", function () {
+      var allFacets = this.get("allFacets"),
+          filterText = this.get("filterText"),
+          filteredFacets;
+
+      if (filterText) {
+        filteredFacets = allFacets.filter(function (facet) {
+          return facet.get("value").match(filterText);
+        });
+      } else {
+        filteredFacets = allFacets;
+      }
+
+      return filteredFacets;
+    }),
+
+    actions: {
+      toggleValueDisplay: function toggleValueDisplay() {
+        this.toggleProperty("hideValues");
+        this.get("parentView").sendAction("toggleValuesDisplayAction", !this.get("hideValues"), this.get("data"));
+      },
+      toggleListLimit: function toggleListLimit() {
+        this.toggleProperty("limitList");
+      },
+      clickedCheckbox: function clickedCheckbox(facet) {
+        var checkedValues = this.get("fieldFacetConditions.in"),
+            value = facet.get("value"),
+            valueIndex = checkedValues.indexOf(value);
+
+        facet.toggleProperty("checked");
+
+        if (facet.get("checked")) {
+          if (valueIndex === -1) {
+            checkedValues.push(value);
+          }
+        } else if (valueIndex !== -1) {
+          checkedValues.splice(valueIndex, 1);
+        }
+
+        this.set("checkedCount", checkedValues.length);
+      },
+
+      selectAll: function selectAll() {
+        var filteredFacets = this.get("filteredFacets"),
+            checkedValues = this.get("fieldFacetConditions.in");
+
+        filteredFacets.forEach(function (facet) {
+          if (!facet.get("checked")) {
+            checkedValues.push(facet.get("value"));
+          }
+
+          facet.set("checked", true);
+        });
+
+        this.set("fieldFacetConditions.in", checkedValues);
+        this.set("checkedCount", checkedValues.length);
+      },
+      clickedOnly: function clickedOnly(facet) {
+        var filteredFacets = this.get("filteredFacets"),
+            checkedValues = this.get("fieldFacetConditions.in"),
+            checkedHash = {};
+
+        checkedValues.forEach(function (value) {
+          checkedHash[value] = true;
+        });
+
+        filteredFacets.forEach(function (facet) {
+          checkedHash[facet.get("value")] = false;
+          facet.set("checked", false);
+        });
+
+        facet.set("checked", true);
+        checkedHash[facet.get("value")] = true;
+
+        checkedValues = [];
+        for (var value in checkedHash) {
+          if (checkedHash[value]) {
+            checkedValues.push(value);
+          }
+        }
+
+        this.set("fieldFacetConditions.in", checkedValues);
+        this.set("checkedCount", checkedValues.length);
+      }
+    }
+
+  });
+});
+define('em-table/components/em-table-facet-panel', ['exports', 'ember', 'em-table/templates/components/em-table-facet-panel'], function (exports, _ember, _emTableTemplatesComponentsEmTableFacetPanel) {
+  'use strict';
+
+  exports['default'] = _ember['default'].Component.extend({
+    layout: _emTableTemplatesComponentsEmTableFacetPanel['default'],
+
+    classNames: ["em-table-facet-panel"],
+    classNameBindings: ['isEmpty', 'hideFilter'],
+
+    isVisible: _ember['default'].computed.alias('tableDefinition.enableFaceting'),
+
+    tableDefinition: null,
+    dataProcessor: null,
+    tmpFacetConditions: {},
+
+    filterText: null,
+    isEmpty: _ember['default'].computed("dataProcessor.facetedFields.length", function () {
+      return this.get("dataProcessor.facetedFields.length") === 0;
+    }),
+    hideFilter: _ember['default'].computed("dataProcessor.facetedFields.length", "tableDefinition.minFieldsForFilter", function () {
+      return this.get("dataProcessor.facetedFields.length") < this.get("tableDefinition.minFieldsForFilter");
+    }),
+
+    didInsertElement: _ember['default'].observer("filterText", "dataProcessor.facetedFields", function () {
+      var fields = this.get("dataProcessor.facetedFields"),
+          filterText = this.get("filterText"),
+          filterRegex = new RegExp(filterText, "i"),
+          elements = _ember['default'].$(this.get("element")).find(".field-list>li");
+
+      elements.each(function (index, element) {
+        var foundMatch = !filterText || _ember['default'].get(fields, index + '.column.headerTitle').match(filterRegex);
+        _ember['default'].$(element)[foundMatch ? "show" : "hide"]();
+      });
+    }),
+
+    _facetConditionsObserver: _ember['default'].observer("tableDefinition.facetConditions", function () {
+      var facetConditions = _ember['default'].$.extend({}, this.get("tableDefinition.facetConditions"));
+      this.set("tmpFacetConditions", facetConditions);
+    }),
+
+    actions: {
+      applyFilters: function applyFilters() {
+        this.set("tableDefinition.facetConditions", this.get("tmpFacetConditions"));
+      },
+      clearFilters: function clearFilters() {
+        this.set("tmpFacetConditions", {});
+        this.set("tableDefinition.facetConditions", {});
       }
     }
   });
@@ -109716,6 +110251,13 @@ define('em-table/components/em-table-search-ui', ['exports', 'ember', 'em-table/
     classNames: ['search-ui'],
     isVisible: _ember['default'].computed.alias('tableDefinition.enableSearch'),
 
+    isSQLClause: _ember['default'].computed("text", function () {
+      var text = this.get("text"),
+          columns = this.get('tableDefinition.columns');
+
+      return this.get("dataProcessor.sql").validateClause(text, columns);
+    }),
+
     text: _ember['default'].computed.oneWay('tableDefinition.searchText'),
 
     actions: {
@@ -109746,8 +110288,10 @@ define('em-table/components/em-table-status-cell', ['exports', 'ember', 'em-tabl
     })
   });
 });
-define('em-table/components/em-table', ['exports', 'ember', 'em-table/utils/table-definition', 'em-table/utils/data-processor', 'em-table/templates/components/em-table'], function (exports, _ember, _emTableUtilsTableDefinition, _emTableUtilsDataProcessor, _emTableTemplatesComponentsEmTable) {
+define('em-table/components/em-table', ['exports', 'ember', 'em-table/utils/table-definition', 'em-table/utils/column-definition', 'em-table/utils/data-processor', 'em-table/templates/components/em-table'], function (exports, _ember, _emTableUtilsTableDefinition, _emTableUtilsColumnDefinition, _emTableUtilsDataProcessor, _emTableTemplatesComponentsEmTable) {
   'use strict';
+
+  var DEFAULT_ROW_HIGHLIGHT_COLOR = "#EEE";
 
   function createAssigner(targetPath, targetKey, sourcePath) {
     return _ember['default'].on("init", _ember['default'].observer(targetPath, sourcePath, function () {
@@ -109759,16 +110303,61 @@ define('em-table/components/em-table', ['exports', 'ember', 'em-table/utils/tabl
     }));
   }
 
+  var HANDLERS = {
+    // Mouse handlers
+    mouseOver: function mouseOver(event) {
+      var index = _ember['default'].$(this).index() + 1;
+      event.data.highlightRow(index);
+    },
+    mouseLeave: function mouseLeave(event) {
+      event.data.highlightRow(-1);
+    },
+
+    // Scroll handler
+    onScroll: function onScroll(event) {
+      var tableBody = event.currentTarget,
+          scrollValues = event.data.get("scrollValues");
+
+      scrollValues.set("left", tableBody.scrollLeft);
+      scrollValues.set("width", tableBody.scrollWidth);
+    }
+  };
+
   exports['default'] = _ember['default'].Component.extend({
     layout: _emTableTemplatesComponentsEmTable['default'],
+
+    classNames: ["em-table"],
+    classNameBindings: ["showScrollShadow", "showLeftScrollShadow", "showRightScrollShadow"],
 
     definition: null,
     dataProcessor: null,
 
+    highlightRowOnMouse: false, // Could be true or {color: "#XYZ"}
+
     headerComponentNames: ['em-table-search-ui', 'em-table-pagination-ui'],
     footerComponentNames: ['em-table-pagination-ui'],
 
-    classNames: ["em-table"],
+    leftPanelComponentName: "em-table-facet-panel",
+    rightPanelComponentName: "",
+
+    columnWidthChangeAction: null,
+
+    scrollChangeAction: null,
+    scrollValues: null,
+    _widthTrackerTimer: null,
+
+    init: function init() {
+      this._super();
+      this.set("scrollValues", _ember['default'].Object.create({
+        left: 0,
+        width: 0,
+        viewPortWidth: 0
+      }));
+    },
+
+    showScrollShadow: false,
+    showLeftScrollShadow: false,
+    showRightScrollShadow: false,
 
     assignDefinitionInProcessor: createAssigner('_dataProcessor', 'tableDefinition', '_definition'),
     assignRowsInProcessor: createAssigner('_dataProcessor', 'rows', 'rows'),
@@ -109794,26 +110383,138 @@ define('em-table/components/em-table', ['exports', 'ember', 'em-table/utils/tabl
       this.sendAction('rowsChanged', this.get('_dataProcessor.processedRows'));
     }),
 
-    _columns: _ember['default'].computed('_definition.columns', function () {
-      var columns = this.get('_definition.columns'),
-          widthText = 100 / columns.length + "%";
-
-      return columns.map(function (column) {
-        return {
-          definition: column,
-          width: widthText
-        };
+    _setColumnWidth: function _setColumnWidth(columns) {
+      var widthText = 100 / columns.length + "%";
+      columns.forEach(function (column) {
+        if (!column.width) {
+          column.width = widthText;
+        }
       });
+    },
+
+    _columns: _ember['default'].computed('_definition.columns', function () {
+      var rawColumns = this.get('_definition.columns'),
+          normalisedColumns = {
+        left: [],
+        center: [],
+        right: [],
+        length: rawColumns.length
+      };
+
+      rawColumns.forEach(function (column) {
+        normalisedColumns[column.get("pin")].push({
+          definition: column,
+          width: column.width
+        });
+      });
+
+      if (normalisedColumns.center.length === 0) {
+        normalisedColumns.center = [{
+          definition: _emTableUtilsColumnDefinition['default'].fillerColumn
+        }];
+      }
+
+      this._setColumnWidth(normalisedColumns.center);
+
+      return normalisedColumns;
     }),
 
-    message: _ember['default'].computed('_columns.length', '_dataProcessor.processedRows.length', '_definition.recordType', function () {
-      if (!this.get('_columns.length')) {
+    message: _ember['default'].computed('_dataProcessor.message', '_columns.length', '_dataProcessor.processedRows.length', function () {
+      var message = this.get("_dataProcessor.message");
+      if (message) {
+        return message;
+      } else if (!this.get('_columns.length')) {
         return "No columns available!";
       } else if (!this.get("_dataProcessor.processedRows.length")) {
         var identifiers = _ember['default'].String.pluralize(this.get('_definition.recordType') || "record");
         return 'No ' + identifiers + ' available!';
       }
     }),
+
+    highlightRow: function highlightRow(index) {
+      var element = _ember['default'].$(this.get("element")),
+          sheet = element.find("style")[0].sheet,
+          elementID = element.attr("id"),
+          color = this.get("highlightRowOnMouse.color") || DEFAULT_ROW_HIGHLIGHT_COLOR;
+
+      try {
+        sheet.deleteRule(0);
+      } catch (e) {}
+
+      if (index >= 0) {
+        sheet.insertRule('#' + elementID + ' .table-cell:nth-child(' + index + '){ background-color: ' + color + '; }', 0);
+      }
+    },
+
+    didInsertElement: function didInsertElement() {
+      _ember['default'].run.scheduleOnce('afterRender', this, function () {
+        this.highlightRowOnMouseObserver();
+        this.scrollChangeActionObserver();
+      });
+    },
+
+    highlightRowOnMouseObserver: _ember['default'].observer("highlightRowOnMouse", function () {
+      var highlightRowOnMouse = this.get("highlightRowOnMouse"),
+          element = this.get("element");
+
+      if (element) {
+        element = _ember['default'].$(element).find(".table-mid");
+
+        if (highlightRowOnMouse) {
+          element.on('mouseover', '.table-cell', this, HANDLERS.mouseOver);
+          element.on('mouseleave', this, HANDLERS.mouseLeave);
+        } else {
+          element.off('mouseover', '.table-cell', HANDLERS.mouseOver);
+          element.off('mouseleave', HANDLERS.mouseLeave);
+        }
+      }
+    }),
+
+    scrollValuesObserver: _ember['default'].observer("scrollValues.left", "scrollValues.width", "scrollValues.viewPortWidth", function () {
+      var scrollValues = this.get("scrollValues");
+
+      this.sendAction("scrollChangeAction", scrollValues);
+
+      this.set("showLeftScrollShadow", scrollValues.left > 1);
+      this.set("showRightScrollShadow", scrollValues.left < scrollValues.width - scrollValues.viewPortWidth);
+    }),
+
+    scrollChangeActionObserver: _ember['default'].observer("scrollChangeAction", "message", "showScrollShadow", function () {
+      _ember['default'].run.scheduleOnce('afterRender', this, function () {
+        var addScrollListener = this.get("scrollChangeAction") || this.get("showScrollShadow"),
+            element = this.$().find(".table-body"),
+            scrollValues = this.get("scrollValues");
+
+        if (addScrollListener && element) {
+          element = element.get(0);
+
+          clearInterval(this.get("_widthTrackerTimer"));
+
+          if (element) {
+            if (addScrollListener) {
+              _ember['default'].$(element).on('scroll', this, HANDLERS.onScroll);
+
+              this.set("_widthTrackerTimer", setInterval(function () {
+                scrollValues.setProperties({
+                  width: element.scrollWidth,
+                  viewPortWidth: element.offsetWidth
+                });
+              }, 1000));
+            } else {
+              element.off('scroll', HANDLERS.onScroll);
+            }
+          }
+        }
+      });
+    }),
+
+    willDestroyElement: function willDestroyElement() {
+      this._super();
+      clearInterval(this.get("_widthTrackerTimer"));
+      _ember['default'].$(this.$().find(".table-body")).off();
+      _ember['default'].$(this.$().find(".table-mid")).off();
+      _ember['default'].$(this.$()).off();
+    },
 
     actions: {
       search: function search(searchText) {
@@ -109834,6 +110535,9 @@ define('em-table/components/em-table', ['exports', 'ember', 'em-table/utils/tabl
       pageChanged: function pageChanged(pageNum) {
         this.set('_definition.pageNum', pageNum);
         this.sendAction("pageAction", pageNum);
+      },
+      columnWidthChanged: function columnWidthChanged(width, columnDefinition, index) {
+        this.sendAction("columnWidthChangeAction", width, columnDefinition, index);
       }
     }
   });
@@ -110271,7 +110975,317 @@ define("em-table/templates/components/em-table-column", ["exports"], function (e
     };
   })());
 });
-define("em-table/templates/components/em-table-header-cell", ["exports"], function (exports) {
+define("em-table/templates/components/em-table-facet-panel-values", ["exports"], function (exports) {
+  "use strict";
+
+  exports["default"] = Ember.HTMLBars.template((function () {
+    var child0 = (function () {
+      return {
+        meta: {
+          "fragmentReason": false,
+          "revision": "Ember@2.2.0",
+          "loc": {
+            "source": null,
+            "start": {
+              "line": 9,
+              "column": 2
+            },
+            "end": {
+              "line": 18,
+              "column": 2
+            }
+          },
+          "moduleName": "modules/em-table/templates/components/em-table-facet-panel-values.hbs"
+        },
+        isEmpty: false,
+        arity: 2,
+        cachedFragment: null,
+        hasRendered: false,
+        buildFragment: function buildFragment(dom) {
+          var el0 = dom.createDocumentFragment();
+          var el1 = dom.createTextNode("    ");
+          dom.appendChild(el0, el1);
+          var el1 = dom.createElement("li");
+          var el2 = dom.createTextNode("\n      ");
+          dom.appendChild(el1, el2);
+          var el2 = dom.createElement("div");
+          dom.setAttribute(el2, "class", "checkbox-container");
+          var el3 = dom.createTextNode("\n        ");
+          dom.appendChild(el2, el3);
+          var el3 = dom.createElement("input");
+          dom.setAttribute(el3, "type", "checkbox");
+          dom.appendChild(el2, el3);
+          var el3 = dom.createTextNode("\n      ");
+          dom.appendChild(el2, el3);
+          dom.appendChild(el1, el2);
+          var el2 = dom.createTextNode("\n      ");
+          dom.appendChild(el1, el2);
+          var el2 = dom.createElement("div");
+          dom.setAttribute(el2, "class", "facet-value");
+          var el3 = dom.createComment("");
+          dom.appendChild(el2, el3);
+          dom.appendChild(el1, el2);
+          var el2 = dom.createTextNode("\n      ");
+          dom.appendChild(el1, el2);
+          var el2 = dom.createElement("a");
+          dom.setAttribute(el2, "class", "only-button");
+          var el3 = dom.createTextNode("only");
+          dom.appendChild(el2, el3);
+          dom.appendChild(el1, el2);
+          var el2 = dom.createTextNode("\n      ");
+          dom.appendChild(el1, el2);
+          var el2 = dom.createElement("a");
+          dom.setAttribute(el2, "class", "facet-count");
+          var el3 = dom.createComment("");
+          dom.appendChild(el2, el3);
+          dom.appendChild(el1, el2);
+          var el2 = dom.createTextNode("\n    ");
+          dom.appendChild(el1, el2);
+          dom.appendChild(el0, el1);
+          var el1 = dom.createTextNode("\n");
+          dom.appendChild(el0, el1);
+          return el0;
+        },
+        buildRenderNodes: function buildRenderNodes(dom, fragment, contextualElement) {
+          var element0 = dom.childAt(fragment, [1]);
+          var element1 = dom.childAt(element0, [1, 1]);
+          if (this.cachedFragment) {
+            dom.repairClonedNode(element1, [], true);
+          }
+          var element2 = dom.childAt(element0, [5]);
+          var morphs = new Array(6);
+          morphs[0] = dom.createAttrMorph(element0, 'title');
+          morphs[1] = dom.createAttrMorph(element1, 'checked');
+          morphs[2] = dom.createAttrMorph(element1, 'onclick');
+          morphs[3] = dom.createMorphAt(dom.childAt(element0, [3]), 0, 0);
+          morphs[4] = dom.createElementMorph(element2);
+          morphs[5] = dom.createMorphAt(dom.childAt(element0, [7]), 0, 0);
+          return morphs;
+        },
+        statements: [["attribute", "title", ["get", "facet.value", ["loc", [null, [10, 16], [10, 27]]]]], ["attribute", "checked", ["get", "facet.checked", ["loc", [null, [12, 41], [12, 54]]]]], ["attribute", "onclick", ["subexpr", "action", ["clickedCheckbox", ["get", "facet", ["loc", [null, [12, 92], [12, 97]]]]], [], ["loc", [null, [12, 65], [12, 99]]]]], ["content", "facet.value", ["loc", [null, [14, 31], [14, 46]]]], ["element", "action", ["clickedOnly", ["get", "facet", ["loc", [null, [15, 52], [15, 57]]]]], [], ["loc", [null, [15, 29], [15, 59]]]], ["content", "facet.count", ["loc", [null, [16, 29], [16, 44]]]]],
+        locals: ["facet", "index"],
+        templates: []
+      };
+    })();
+    var child1 = (function () {
+      return {
+        meta: {
+          "fragmentReason": false,
+          "revision": "Ember@2.2.0",
+          "loc": {
+            "source": null,
+            "start": {
+              "line": 18,
+              "column": 2
+            },
+            "end": {
+              "line": 20,
+              "column": 2
+            }
+          },
+          "moduleName": "modules/em-table/templates/components/em-table-facet-panel-values.hbs"
+        },
+        isEmpty: false,
+        arity: 0,
+        cachedFragment: null,
+        hasRendered: false,
+        buildFragment: function buildFragment(dom) {
+          var el0 = dom.createDocumentFragment();
+          var el1 = dom.createTextNode("    ");
+          dom.appendChild(el0, el1);
+          var el1 = dom.createElement("span");
+          dom.setAttribute(el1, "class", "filter-message");
+          var el2 = dom.createTextNode("No fields!");
+          dom.appendChild(el1, el2);
+          dom.appendChild(el0, el1);
+          var el1 = dom.createTextNode("\n");
+          dom.appendChild(el0, el1);
+          return el0;
+        },
+        buildRenderNodes: function buildRenderNodes() {
+          return [];
+        },
+        statements: [],
+        locals: [],
+        templates: []
+      };
+    })();
+    var child2 = (function () {
+      return {
+        meta: {
+          "fragmentReason": false,
+          "revision": "Ember@2.2.0",
+          "loc": {
+            "source": null,
+            "start": {
+              "line": 24,
+              "column": 2
+            },
+            "end": {
+              "line": 26,
+              "column": 2
+            }
+          },
+          "moduleName": "modules/em-table/templates/components/em-table-facet-panel-values.hbs"
+        },
+        isEmpty: false,
+        arity: 0,
+        cachedFragment: null,
+        hasRendered: false,
+        buildFragment: function buildFragment(dom) {
+          var el0 = dom.createDocumentFragment();
+          var el1 = dom.createTextNode("    More\n");
+          dom.appendChild(el0, el1);
+          return el0;
+        },
+        buildRenderNodes: function buildRenderNodes() {
+          return [];
+        },
+        statements: [],
+        locals: [],
+        templates: []
+      };
+    })();
+    var child3 = (function () {
+      return {
+        meta: {
+          "fragmentReason": false,
+          "revision": "Ember@2.2.0",
+          "loc": {
+            "source": null,
+            "start": {
+              "line": 26,
+              "column": 2
+            },
+            "end": {
+              "line": 28,
+              "column": 2
+            }
+          },
+          "moduleName": "modules/em-table/templates/components/em-table-facet-panel-values.hbs"
+        },
+        isEmpty: false,
+        arity: 0,
+        cachedFragment: null,
+        hasRendered: false,
+        buildFragment: function buildFragment(dom) {
+          var el0 = dom.createDocumentFragment();
+          var el1 = dom.createTextNode("    Less\n");
+          dom.appendChild(el0, el1);
+          return el0;
+        },
+        buildRenderNodes: function buildRenderNodes() {
+          return [];
+        },
+        statements: [],
+        locals: [],
+        templates: []
+      };
+    })();
+    return {
+      meta: {
+        "fragmentReason": {
+          "name": "missing-wrapper",
+          "problems": ["multiple-nodes"]
+        },
+        "revision": "Ember@2.2.0",
+        "loc": {
+          "source": null,
+          "start": {
+            "line": 1,
+            "column": 0
+          },
+          "end": {
+            "line": 29,
+            "column": 4
+          }
+        },
+        "moduleName": "modules/em-table/templates/components/em-table-facet-panel-values.hbs"
+      },
+      isEmpty: false,
+      arity: 0,
+      cachedFragment: null,
+      hasRendered: false,
+      buildFragment: function buildFragment(dom) {
+        var el0 = dom.createDocumentFragment();
+        var el1 = dom.createElement("div");
+        dom.setAttribute(el1, "class", "field-name");
+        var el2 = dom.createTextNode("\n  ");
+        dom.appendChild(el1, el2);
+        var el2 = dom.createElement("div");
+        dom.setAttribute(el2, "class", "field-title");
+        var el3 = dom.createComment("");
+        dom.appendChild(el2, el3);
+        dom.appendChild(el1, el2);
+        var el2 = dom.createTextNode("\n  ");
+        dom.appendChild(el1, el2);
+        var el2 = dom.createElement("div");
+        dom.setAttribute(el2, "class", "field-count");
+        var el3 = dom.createTextNode("(");
+        dom.appendChild(el2, el3);
+        var el3 = dom.createComment("");
+        dom.appendChild(el2, el3);
+        var el3 = dom.createTextNode(")");
+        dom.appendChild(el2, el3);
+        dom.appendChild(el1, el2);
+        var el2 = dom.createTextNode("\n  ");
+        dom.appendChild(el1, el2);
+        var el2 = dom.createElement("a");
+        dom.setAttribute(el2, "class", "all-button");
+        var el3 = dom.createTextNode("All");
+        dom.appendChild(el2, el3);
+        dom.appendChild(el1, el2);
+        var el2 = dom.createTextNode("\n");
+        dom.appendChild(el1, el2);
+        dom.appendChild(el0, el1);
+        var el1 = dom.createTextNode("\n\n");
+        dom.appendChild(el0, el1);
+        var el1 = dom.createElement("ul");
+        dom.setAttribute(el1, "class", "value-list");
+        var el2 = dom.createTextNode("\n  ");
+        dom.appendChild(el1, el2);
+        var el2 = dom.createComment("");
+        dom.appendChild(el1, el2);
+        var el2 = dom.createTextNode("\n");
+        dom.appendChild(el1, el2);
+        var el2 = dom.createComment("");
+        dom.appendChild(el1, el2);
+        dom.appendChild(el0, el1);
+        var el1 = dom.createTextNode("\n\n");
+        dom.appendChild(el0, el1);
+        var el1 = dom.createElement("a");
+        dom.setAttribute(el1, "class", "more-less");
+        var el2 = dom.createTextNode("\n");
+        dom.appendChild(el1, el2);
+        var el2 = dom.createComment("");
+        dom.appendChild(el1, el2);
+        dom.appendChild(el0, el1);
+        return el0;
+      },
+      buildRenderNodes: function buildRenderNodes(dom, fragment, contextualElement) {
+        var element3 = dom.childAt(fragment, [0]);
+        var element4 = dom.childAt(element3, [5]);
+        var element5 = dom.childAt(fragment, [2]);
+        var element6 = dom.childAt(fragment, [4]);
+        var morphs = new Array(9);
+        morphs[0] = dom.createAttrMorph(element3, 'title');
+        morphs[1] = dom.createElementMorph(element3);
+        morphs[2] = dom.createMorphAt(dom.childAt(element3, [1]), 0, 0);
+        morphs[3] = dom.createMorphAt(dom.childAt(element3, [3]), 1, 1);
+        morphs[4] = dom.createElementMorph(element4);
+        morphs[5] = dom.createMorphAt(element5, 1, 1);
+        morphs[6] = dom.createMorphAt(element5, 3, 3);
+        morphs[7] = dom.createElementMorph(element6);
+        morphs[8] = dom.createMorphAt(element6, 1, 1);
+        return morphs;
+      },
+      statements: [["attribute", "title", ["get", "data.column.headerTitle", ["loc", [null, [1, 64], [1, 87]]]]], ["element", "action", ["toggleValueDisplay"], [], ["loc", [null, [1, 24], [1, 55]]]], ["content", "data.column.headerTitle", ["loc", [null, [2, 27], [2, 54]]]], ["content", "data.facets.length", ["loc", [null, [3, 28], [3, 50]]]], ["element", "action", ["selectAll"], ["bubbles", false], ["loc", [null, [4, 24], [4, 60]]]], ["inline", "input", [], ["type", "text", "class", "filter-box", "value", ["subexpr", "@mut", [["get", "filterText", ["loc", [null, [8, 47], [8, 57]]]]], [], []], "placeholder", "Filter"], ["loc", [null, [8, 2], [8, 80]]]], ["block", "each", [["get", "filteredFacets", ["loc", [null, [9, 10], [9, 24]]]]], ["key", "value"], 0, 1, ["loc", [null, [9, 2], [20, 11]]]], ["element", "action", ["toggleListLimit"], [], ["loc", [null, [23, 21], [23, 49]]]], ["block", "if", [["get", "limitList", ["loc", [null, [24, 8], [24, 17]]]]], [], 2, 3, ["loc", [null, [24, 2], [28, 9]]]]],
+      locals: [],
+      templates: [child0, child1, child2, child3]
+    };
+  })());
+});
+define("em-table/templates/components/em-table-facet-panel", ["exports"], function (exports) {
   "use strict";
 
   exports["default"] = Ember.HTMLBars.template((function () {
@@ -110284,11 +111298,274 @@ define("em-table/templates/components/em-table-header-cell", ["exports"], functi
             "loc": {
               "source": null,
               "start": {
+                "line": 4,
+                "column": 4
+              },
+              "end": {
+                "line": 6,
+                "column": 4
+              }
+            },
+            "moduleName": "modules/em-table/templates/components/em-table-facet-panel.hbs"
+          },
+          isEmpty: false,
+          arity: 2,
+          cachedFragment: null,
+          hasRendered: false,
+          buildFragment: function buildFragment(dom) {
+            var el0 = dom.createDocumentFragment();
+            var el1 = dom.createTextNode("      ");
+            dom.appendChild(el0, el1);
+            var el1 = dom.createElement("li");
+            var el2 = dom.createComment("");
+            dom.appendChild(el1, el2);
+            dom.appendChild(el0, el1);
+            var el1 = dom.createTextNode("\n");
+            dom.appendChild(el0, el1);
+            return el0;
+          },
+          buildRenderNodes: function buildRenderNodes(dom, fragment, contextualElement) {
+            var morphs = new Array(1);
+            morphs[0] = dom.createMorphAt(dom.childAt(fragment, [1]), 0, 0);
+            return morphs;
+          },
+          statements: [["inline", "component", [["get", "field.column.facetType.componentName", ["loc", [null, [5, 22], [5, 58]]]]], ["data", ["subexpr", "@mut", [["get", "field", ["loc", [null, [5, 64], [5, 69]]]]], [], []], "tableDefinition", ["subexpr", "@mut", [["get", "tableDefinition", ["loc", [null, [5, 86], [5, 101]]]]], [], []], "dataProcessor", ["subexpr", "@mut", [["get", "dataProcessor", ["loc", [null, [5, 116], [5, 129]]]]], [], []], "tmpFacetConditions", ["subexpr", "@mut", [["get", "tmpFacetConditions", ["loc", [null, [5, 149], [5, 167]]]]], [], []]], ["loc", [null, [5, 10], [5, 169]]]]],
+          locals: ["field", "fieldIndex"],
+          templates: []
+        };
+      })();
+      return {
+        meta: {
+          "fragmentReason": {
+            "name": "missing-wrapper",
+            "problems": ["multiple-nodes"]
+          },
+          "revision": "Ember@2.2.0",
+          "loc": {
+            "source": null,
+            "start": {
+              "line": 1,
+              "column": 0
+            },
+            "end": {
+              "line": 13,
+              "column": 0
+            }
+          },
+          "moduleName": "modules/em-table/templates/components/em-table-facet-panel.hbs"
+        },
+        isEmpty: false,
+        arity: 0,
+        cachedFragment: null,
+        hasRendered: false,
+        buildFragment: function buildFragment(dom) {
+          var el0 = dom.createDocumentFragment();
+          var el1 = dom.createTextNode("  ");
+          dom.appendChild(el0, el1);
+          var el1 = dom.createElement("ul");
+          dom.setAttribute(el1, "class", "field-list");
+          var el2 = dom.createTextNode("\n    ");
+          dom.appendChild(el1, el2);
+          var el2 = dom.createComment("");
+          dom.appendChild(el1, el2);
+          var el2 = dom.createTextNode("\n");
+          dom.appendChild(el1, el2);
+          var el2 = dom.createComment("");
+          dom.appendChild(el1, el2);
+          var el2 = dom.createTextNode("  ");
+          dom.appendChild(el1, el2);
+          dom.appendChild(el0, el1);
+          var el1 = dom.createTextNode("\n\n  ");
+          dom.appendChild(el0, el1);
+          var el1 = dom.createElement("div");
+          dom.setAttribute(el1, "class", "buttons");
+          var el2 = dom.createTextNode("\n    ");
+          dom.appendChild(el1, el2);
+          var el2 = dom.createElement("button");
+          dom.setAttribute(el2, "type", "button");
+          dom.setAttribute(el2, "class", "btn btn-primary");
+          var el3 = dom.createTextNode("Apply");
+          dom.appendChild(el2, el3);
+          dom.appendChild(el1, el2);
+          var el2 = dom.createTextNode("\n    ");
+          dom.appendChild(el1, el2);
+          var el2 = dom.createElement("button");
+          dom.setAttribute(el2, "type", "button");
+          dom.setAttribute(el2, "class", "btn btn-default");
+          var el3 = dom.createTextNode("Clear");
+          dom.appendChild(el2, el3);
+          dom.appendChild(el1, el2);
+          var el2 = dom.createTextNode("\n  ");
+          dom.appendChild(el1, el2);
+          dom.appendChild(el0, el1);
+          var el1 = dom.createTextNode("\n");
+          dom.appendChild(el0, el1);
+          return el0;
+        },
+        buildRenderNodes: function buildRenderNodes(dom, fragment, contextualElement) {
+          var element0 = dom.childAt(fragment, [1]);
+          var element1 = dom.childAt(fragment, [3]);
+          var element2 = dom.childAt(element1, [1]);
+          var element3 = dom.childAt(element1, [3]);
+          var morphs = new Array(4);
+          morphs[0] = dom.createMorphAt(element0, 1, 1);
+          morphs[1] = dom.createMorphAt(element0, 3, 3);
+          morphs[2] = dom.createElementMorph(element2);
+          morphs[3] = dom.createElementMorph(element3);
+          return morphs;
+        },
+        statements: [["inline", "input", [], ["type", "text", "class", "field-filter-box", "value", ["subexpr", "@mut", [["get", "filterText", ["loc", [null, [3, 55], [3, 65]]]]], [], []], "placeholder", "Filter"], ["loc", [null, [3, 4], [3, 88]]]], ["block", "each", [["get", "dataProcessor.facetedFields", ["loc", [null, [4, 12], [4, 39]]]]], ["key", "column.id"], 0, null, ["loc", [null, [4, 4], [6, 13]]]], ["element", "action", ["applyFilters"], [], ["loc", [null, [10, 50], [10, 75]]]], ["element", "action", ["clearFilters"], [], ["loc", [null, [11, 50], [11, 75]]]]],
+        locals: [],
+        templates: [child0]
+      };
+    })();
+    var child1 = (function () {
+      return {
+        meta: {
+          "fragmentReason": false,
+          "revision": "Ember@2.2.0",
+          "loc": {
+            "source": null,
+            "start": {
+              "line": 13,
+              "column": 0
+            },
+            "end": {
+              "line": 15,
+              "column": 0
+            }
+          },
+          "moduleName": "modules/em-table/templates/components/em-table-facet-panel.hbs"
+        },
+        isEmpty: false,
+        arity: 0,
+        cachedFragment: null,
+        hasRendered: false,
+        buildFragment: function buildFragment(dom) {
+          var el0 = dom.createDocumentFragment();
+          var el1 = dom.createTextNode("  ");
+          dom.appendChild(el0, el1);
+          var el1 = dom.createElement("h4");
+          var el2 = dom.createTextNode("Not Available!");
+          dom.appendChild(el1, el2);
+          dom.appendChild(el0, el1);
+          var el1 = dom.createTextNode("\n");
+          dom.appendChild(el0, el1);
+          return el0;
+        },
+        buildRenderNodes: function buildRenderNodes() {
+          return [];
+        },
+        statements: [],
+        locals: [],
+        templates: []
+      };
+    })();
+    return {
+      meta: {
+        "fragmentReason": {
+          "name": "missing-wrapper",
+          "problems": ["wrong-type"]
+        },
+        "revision": "Ember@2.2.0",
+        "loc": {
+          "source": null,
+          "start": {
+            "line": 1,
+            "column": 0
+          },
+          "end": {
+            "line": 16,
+            "column": 0
+          }
+        },
+        "moduleName": "modules/em-table/templates/components/em-table-facet-panel.hbs"
+      },
+      isEmpty: false,
+      arity: 0,
+      cachedFragment: null,
+      hasRendered: false,
+      buildFragment: function buildFragment(dom) {
+        var el0 = dom.createDocumentFragment();
+        var el1 = dom.createComment("");
+        dom.appendChild(el0, el1);
+        return el0;
+      },
+      buildRenderNodes: function buildRenderNodes(dom, fragment, contextualElement) {
+        var morphs = new Array(1);
+        morphs[0] = dom.createMorphAt(fragment, 0, 0, contextualElement);
+        dom.insertBoundary(fragment, 0);
+        dom.insertBoundary(fragment, null);
+        return morphs;
+      },
+      statements: [["block", "if", [["get", "dataProcessor.facetedFields.length", ["loc", [null, [1, 6], [1, 40]]]]], [], 0, 1, ["loc", [null, [1, 0], [15, 7]]]]],
+      locals: [],
+      templates: [child0, child1]
+    };
+  })());
+});
+define("em-table/templates/components/em-table-header-cell", ["exports"], function (exports) {
+  "use strict";
+
+  exports["default"] = Ember.HTMLBars.template((function () {
+    var child0 = (function () {
+      var child0 = (function () {
+        var child0 = (function () {
+          return {
+            meta: {
+              "fragmentReason": false,
+              "revision": "Ember@2.2.0",
+              "loc": {
+                "source": null,
+                "start": {
+                  "line": 5,
+                  "column": 4
+                },
+                "end": {
+                  "line": 7,
+                  "column": 4
+                }
+              },
+              "moduleName": "modules/em-table/templates/components/em-table-header-cell.hbs"
+            },
+            isEmpty: false,
+            arity: 0,
+            cachedFragment: null,
+            hasRendered: false,
+            buildFragment: function buildFragment(dom) {
+              var el0 = dom.createDocumentFragment();
+              var el1 = dom.createTextNode("      ");
+              dom.appendChild(el0, el1);
+              var el1 = dom.createElement("span");
+              dom.setAttribute(el1, "class", "sort-bar");
+              dom.appendChild(el0, el1);
+              var el1 = dom.createTextNode("\n");
+              dom.appendChild(el0, el1);
+              return el0;
+            },
+            buildRenderNodes: function buildRenderNodes(dom, fragment, contextualElement) {
+              var element1 = dom.childAt(fragment, [1]);
+              var morphs = new Array(1);
+              morphs[0] = dom.createElementMorph(element1);
+              return morphs;
+            },
+            statements: [["element", "action", ["sort"], [], ["loc", [null, [6, 29], [6, 46]]]]],
+            locals: [],
+            templates: []
+          };
+        })();
+        return {
+          meta: {
+            "fragmentReason": false,
+            "revision": "Ember@2.2.0",
+            "loc": {
+              "source": null,
+              "start": {
                 "line": 3,
                 "column": 36
               },
               "end": {
-                "line": 5,
+                "line": 8,
                 "column": 2
               }
             },
@@ -110304,21 +111581,26 @@ define("em-table/templates/components/em-table-header-cell", ["exports"], functi
             dom.appendChild(el0, el1);
             var el1 = dom.createElement("span");
             dom.appendChild(el0, el1);
-            var el1 = dom.createTextNode("\n  ");
+            var el1 = dom.createTextNode("\n");
+            dom.appendChild(el0, el1);
+            var el1 = dom.createComment("");
+            dom.appendChild(el0, el1);
+            var el1 = dom.createTextNode("  ");
             dom.appendChild(el0, el1);
             return el0;
           },
           buildRenderNodes: function buildRenderNodes(dom, fragment, contextualElement) {
-            var element1 = dom.childAt(fragment, [1]);
-            var morphs = new Array(3);
-            morphs[0] = dom.createAttrMorph(element1, 'title');
-            morphs[1] = dom.createAttrMorph(element1, 'class');
-            morphs[2] = dom.createElementMorph(element1);
+            var element2 = dom.childAt(fragment, [1]);
+            var morphs = new Array(4);
+            morphs[0] = dom.createAttrMorph(element2, 'title');
+            morphs[1] = dom.createAttrMorph(element2, 'class');
+            morphs[2] = dom.createElementMorph(element2);
+            morphs[3] = dom.createMorphAt(fragment, 3, 3, contextualElement);
             return morphs;
           },
-          statements: [["attribute", "title", ["concat", ["Sort ", ["get", "sortToggledTitle", ["loc", [null, [4, 24], [4, 40]]]]]]], ["attribute", "class", ["concat", ["sort-icon ", ["get", "sortIconCSS", ["loc", [null, [4, 63], [4, 74]]]]]]], ["element", "action", ["sort"], [], ["loc", [null, [4, 78], [4, 95]]]]],
+          statements: [["attribute", "title", ["concat", ["Sort ", ["get", "sortToggledTitle", ["loc", [null, [4, 24], [4, 40]]]]]]], ["attribute", "class", ["concat", ["sort-icon ", ["get", "sortIconCSS", ["loc", [null, [4, 63], [4, 74]]]]]]], ["element", "action", ["sort"], [], ["loc", [null, [4, 78], [4, 95]]]], ["block", "if", [["get", "tableDefinition.headerAsSortButton", ["loc", [null, [5, 10], [5, 44]]]]], [], 0, null, ["loc", [null, [5, 4], [7, 11]]]]],
           locals: [],
-          templates: []
+          templates: [child0]
         };
       })();
       return {
@@ -110332,7 +111614,7 @@ define("em-table/templates/components/em-table-header-cell", ["exports"], functi
               "column": 2
             },
             "end": {
-              "line": 5,
+              "line": 8,
               "column": 9
             }
           },
@@ -110355,7 +111637,7 @@ define("em-table/templates/components/em-table-header-cell", ["exports"], functi
           dom.insertBoundary(fragment, null);
           return morphs;
         },
-        statements: [["block", "if", [["get", "definition.enableSort", ["loc", [null, [3, 42], [3, 63]]]]], [], 0, null, ["loc", [null, [3, 36], [5, 9]]]]],
+        statements: [["block", "if", [["get", "definition.enableSort", ["loc", [null, [3, 42], [3, 63]]]]], [], 0, null, ["loc", [null, [3, 36], [8, 9]]]]],
         locals: [],
         templates: [child0]
       };
@@ -110369,11 +111651,11 @@ define("em-table/templates/components/em-table-header-cell", ["exports"], functi
             "loc": {
               "source": null,
               "start": {
-                "line": 6,
+                "line": 9,
                 "column": 44
               },
               "end": {
-                "line": 8,
+                "line": 11,
                 "column": 2
               }
             },
@@ -110401,7 +111683,7 @@ define("em-table/templates/components/em-table-header-cell", ["exports"], functi
             morphs[0] = dom.createElementMorph(element0);
             return morphs;
           },
-          statements: [["element", "action", ["startColResize"], ["on", "mouseDown"], ["loc", [null, [7, 54], [7, 96]]]]],
+          statements: [["element", "action", ["startColResize"], ["on", "mouseDown"], ["loc", [null, [10, 54], [10, 96]]]]],
           locals: [],
           templates: []
         };
@@ -110413,11 +111695,11 @@ define("em-table/templates/components/em-table-header-cell", ["exports"], functi
           "loc": {
             "source": null,
             "start": {
-              "line": 6,
+              "line": 9,
               "column": 2
             },
             "end": {
-              "line": 8,
+              "line": 11,
               "column": 9
             }
           },
@@ -110440,7 +111722,7 @@ define("em-table/templates/components/em-table-header-cell", ["exports"], functi
           dom.insertBoundary(fragment, null);
           return morphs;
         },
-        statements: [["block", "if", [["get", "definition.enableColumnResize", ["loc", [null, [6, 50], [6, 79]]]]], [], 0, null, ["loc", [null, [6, 44], [8, 9]]]]],
+        statements: [["block", "if", [["get", "definition.enableColumnResize", ["loc", [null, [9, 50], [9, 79]]]]], [], 0, null, ["loc", [null, [9, 44], [11, 9]]]]],
         locals: [],
         templates: [child0]
       };
@@ -110458,7 +111740,7 @@ define("em-table/templates/components/em-table-header-cell", ["exports"], functi
             "column": 0
           },
           "end": {
-            "line": 9,
+            "line": 12,
             "column": 6
           }
         },
@@ -110490,14 +111772,14 @@ define("em-table/templates/components/em-table-header-cell", ["exports"], functi
         return el0;
       },
       buildRenderNodes: function buildRenderNodes(dom, fragment, contextualElement) {
-        var element2 = dom.childAt(fragment, [0]);
+        var element3 = dom.childAt(fragment, [0]);
         var morphs = new Array(3);
-        morphs[0] = dom.createMorphAt(element2, 1, 1);
-        morphs[1] = dom.createMorphAt(element2, 3, 3);
-        morphs[2] = dom.createMorphAt(element2, 5, 5);
+        morphs[0] = dom.createMorphAt(element3, 1, 1);
+        morphs[1] = dom.createMorphAt(element3, 3, 3);
+        morphs[2] = dom.createMorphAt(element3, 5, 5);
         return morphs;
       },
-      statements: [["content", "title", ["loc", [null, [2, 2], [2, 11]]]], ["block", "if", [["get", "tableDefinition.enableSort", ["loc", [null, [3, 8], [3, 34]]]]], [], 0, null, ["loc", [null, [3, 2], [5, 16]]]], ["block", "if", [["get", "tableDefinition.enableColumnResize", ["loc", [null, [6, 8], [6, 42]]]]], [], 1, null, ["loc", [null, [6, 2], [8, 16]]]]],
+      statements: [["content", "title", ["loc", [null, [2, 2], [2, 11]]]], ["block", "if", [["get", "tableDefinition.enableSort", ["loc", [null, [3, 8], [3, 34]]]]], [], 0, null, ["loc", [null, [3, 2], [8, 16]]]], ["block", "if", [["get", "tableDefinition.enableColumnResize", ["loc", [null, [9, 8], [9, 42]]]]], [], 1, null, ["loc", [null, [9, 2], [11, 16]]]]],
       locals: [],
       templates: [child0, child1]
     };
@@ -111471,6 +112753,118 @@ define("em-table/templates/components/em-table-search-ui", ["exports"], function
       };
     })();
     var child1 = (function () {
+      var child0 = (function () {
+        var child0 = (function () {
+          return {
+            meta: {
+              "fragmentReason": false,
+              "revision": "Ember@2.2.0",
+              "loc": {
+                "source": null,
+                "start": {
+                  "line": 15,
+                  "column": 10
+                },
+                "end": {
+                  "line": 17,
+                  "column": 10
+                }
+              },
+              "moduleName": "modules/em-table/templates/components/em-table-search-ui.hbs"
+            },
+            isEmpty: false,
+            arity: 0,
+            cachedFragment: null,
+            hasRendered: false,
+            buildFragment: function buildFragment(dom) {
+              var el0 = dom.createDocumentFragment();
+              var el1 = dom.createTextNode("            SQL\n");
+              dom.appendChild(el0, el1);
+              return el0;
+            },
+            buildRenderNodes: function buildRenderNodes() {
+              return [];
+            },
+            statements: [],
+            locals: [],
+            templates: []
+          };
+        })();
+        var child1 = (function () {
+          return {
+            meta: {
+              "fragmentReason": false,
+              "revision": "Ember@2.2.0",
+              "loc": {
+                "source": null,
+                "start": {
+                  "line": 17,
+                  "column": 10
+                },
+                "end": {
+                  "line": 19,
+                  "column": 10
+                }
+              },
+              "moduleName": "modules/em-table/templates/components/em-table-search-ui.hbs"
+            },
+            isEmpty: false,
+            arity: 0,
+            cachedFragment: null,
+            hasRendered: false,
+            buildFragment: function buildFragment(dom) {
+              var el0 = dom.createDocumentFragment();
+              var el1 = dom.createTextNode("            Regex\n");
+              dom.appendChild(el0, el1);
+              return el0;
+            },
+            buildRenderNodes: function buildRenderNodes() {
+              return [];
+            },
+            statements: [],
+            locals: [],
+            templates: []
+          };
+        })();
+        return {
+          meta: {
+            "fragmentReason": false,
+            "revision": "Ember@2.2.0",
+            "loc": {
+              "source": null,
+              "start": {
+                "line": 14,
+                "column": 8
+              },
+              "end": {
+                "line": 20,
+                "column": 8
+              }
+            },
+            "moduleName": "modules/em-table/templates/components/em-table-search-ui.hbs"
+          },
+          isEmpty: false,
+          arity: 0,
+          cachedFragment: null,
+          hasRendered: false,
+          buildFragment: function buildFragment(dom) {
+            var el0 = dom.createDocumentFragment();
+            var el1 = dom.createComment("");
+            dom.appendChild(el0, el1);
+            return el0;
+          },
+          buildRenderNodes: function buildRenderNodes(dom, fragment, contextualElement) {
+            var morphs = new Array(1);
+            morphs[0] = dom.createMorphAt(fragment, 0, 0, contextualElement);
+            dom.insertBoundary(fragment, 0);
+            dom.insertBoundary(fragment, null);
+            return morphs;
+          },
+          statements: [["block", "if", [["get", "isSQLClause", ["loc", [null, [15, 16], [15, 27]]]]], [], 0, 1, ["loc", [null, [15, 10], [19, 17]]]]],
+          locals: [],
+          templates: [child0, child1]
+        };
+      })();
       return {
         meta: {
           "fragmentReason": false,
@@ -111482,7 +112876,7 @@ define("em-table/templates/components/em-table-search-ui", ["exports"], function
               "column": 6
             },
             "end": {
-              "line": 15,
+              "line": 22,
               "column": 6
             }
           },
@@ -111494,16 +112888,21 @@ define("em-table/templates/components/em-table-search-ui", ["exports"], function
         hasRendered: false,
         buildFragment: function buildFragment(dom) {
           var el0 = dom.createDocumentFragment();
+          var el1 = dom.createComment("");
+          dom.appendChild(el0, el1);
           var el1 = dom.createTextNode("        Search\n");
           dom.appendChild(el0, el1);
           return el0;
         },
-        buildRenderNodes: function buildRenderNodes() {
-          return [];
+        buildRenderNodes: function buildRenderNodes(dom, fragment, contextualElement) {
+          var morphs = new Array(1);
+          morphs[0] = dom.createMorphAt(fragment, 0, 0, contextualElement);
+          dom.insertBoundary(fragment, 0);
+          return morphs;
         },
-        statements: [],
+        statements: [["block", "if", [["get", "text", ["loc", [null, [14, 14], [14, 18]]]]], [], 0, null, ["loc", [null, [14, 8], [20, 15]]]]],
         locals: [],
-        templates: []
+        templates: [child0]
       };
     })();
     return {
@@ -111519,7 +112918,7 @@ define("em-table/templates/components/em-table-search-ui", ["exports"], function
             "column": 0
           },
           "end": {
-            "line": 19,
+            "line": 26,
             "column": 0
           }
         },
@@ -111572,7 +112971,7 @@ define("em-table/templates/components/em-table-search-ui", ["exports"], function
         morphs[3] = dom.createMorphAt(element1, 1, 1);
         return morphs;
       },
-      statements: [["inline", "input", [], ["type", "text", "class", "form-control", "placeholder", "Search...", "enter", "search", "value", ["subexpr", "@mut", [["get", "text", ["loc", [null, [7, 10], [7, 14]]]]], [], []]], ["loc", [null, [2, 2], [8, 4]]]], ["attribute", "class", ["concat", ["btn btn-default ", ["subexpr", "if", [["get", "dataProcessor.isSearching", ["loc", [null, [10, 40], [10, 65]]]], "animated-stripes"], [], ["loc", [null, [10, 35], [10, 86]]]]]]], ["element", "action", ["search"], [], ["loc", [null, [10, 102], [10, 121]]]], ["block", "if", [["get", "dataProcessor.isSearching", ["loc", [null, [11, 12], [11, 37]]]]], [], 0, 1, ["loc", [null, [11, 6], [15, 13]]]]],
+      statements: [["inline", "input", [], ["type", "text", "class", "form-control", "placeholder", "Search...", "enter", "search", "value", ["subexpr", "@mut", [["get", "text", ["loc", [null, [7, 10], [7, 14]]]]], [], []]], ["loc", [null, [2, 2], [8, 4]]]], ["attribute", "class", ["concat", ["btn btn-default ", ["subexpr", "if", [["get", "dataProcessor.isSearching", ["loc", [null, [10, 40], [10, 65]]]], "animated-stripes"], [], ["loc", [null, [10, 35], [10, 86]]]]]]], ["element", "action", ["search"], [], ["loc", [null, [10, 102], [10, 121]]]], ["block", "if", [["get", "dataProcessor.isSearching", ["loc", [null, [11, 12], [11, 37]]]]], [], 0, 1, ["loc", [null, [11, 6], [22, 13]]]]],
       locals: [],
       templates: [child0, child1]
     };
@@ -111737,11 +113136,11 @@ define("em-table/templates/components/em-table", ["exports"], function (exports)
           "loc": {
             "source": null,
             "start": {
-              "line": 3,
+              "line": 6,
               "column": 2
             },
             "end": {
-              "line": 5,
+              "line": 8,
               "column": 2
             }
           },
@@ -111766,7 +113165,7 @@ define("em-table/templates/components/em-table", ["exports"], function (exports)
           morphs[0] = dom.createMorphAt(fragment, 1, 1, contextualElement);
           return morphs;
         },
-        statements: [["inline", "component", [["get", "componentName", ["loc", [null, [4, 16], [4, 29]]]]], ["tableDefinition", ["subexpr", "@mut", [["get", "_definition", ["loc", [null, [4, 46], [4, 57]]]]], [], []], "dataProcessor", ["subexpr", "@mut", [["get", "_dataProcessor", ["loc", [null, [4, 72], [4, 86]]]]], [], []]], ["loc", [null, [4, 4], [4, 88]]]]],
+        statements: [["inline", "component", [["get", "componentName", ["loc", [null, [7, 16], [7, 29]]]]], ["tableDefinition", ["subexpr", "@mut", [["get", "_definition", ["loc", [null, [7, 46], [7, 57]]]]], [], []], "dataProcessor", ["subexpr", "@mut", [["get", "_dataProcessor", ["loc", [null, [7, 72], [7, 86]]]]], [], []]], ["loc", [null, [7, 4], [7, 88]]]]],
         locals: ["componentName"],
         templates: []
       };
@@ -111779,11 +113178,53 @@ define("em-table/templates/components/em-table", ["exports"], function (exports)
           "loc": {
             "source": null,
             "start": {
-              "line": 10,
+              "line": 13,
+              "column": 4
+            },
+            "end": {
+              "line": 15,
+              "column": 4
+            }
+          },
+          "moduleName": "modules/em-table/templates/components/em-table.hbs"
+        },
+        isEmpty: false,
+        arity: 0,
+        cachedFragment: null,
+        hasRendered: false,
+        buildFragment: function buildFragment(dom) {
+          var el0 = dom.createDocumentFragment();
+          var el1 = dom.createTextNode("      ");
+          dom.appendChild(el0, el1);
+          var el1 = dom.createComment("");
+          dom.appendChild(el0, el1);
+          var el1 = dom.createTextNode("\n");
+          dom.appendChild(el0, el1);
+          return el0;
+        },
+        buildRenderNodes: function buildRenderNodes(dom, fragment, contextualElement) {
+          var morphs = new Array(1);
+          morphs[0] = dom.createMorphAt(fragment, 1, 1, contextualElement);
+          return morphs;
+        },
+        statements: [["inline", "component", [["get", "leftPanelComponentName", ["loc", [null, [14, 18], [14, 40]]]]], ["tableDefinition", ["subexpr", "@mut", [["get", "_definition", ["loc", [null, [14, 57], [14, 68]]]]], [], []], "dataProcessor", ["subexpr", "@mut", [["get", "_dataProcessor", ["loc", [null, [14, 83], [14, 97]]]]], [], []]], ["loc", [null, [14, 6], [14, 99]]]]],
+        locals: [],
+        templates: []
+      };
+    })();
+    var child2 = (function () {
+      return {
+        meta: {
+          "fragmentReason": false,
+          "revision": "Ember@2.2.0",
+          "loc": {
+            "source": null,
+            "start": {
+              "line": 18,
               "column": 2
             },
             "end": {
-              "line": 12,
+              "line": 20,
               "column": 2
             }
           },
@@ -111811,13 +113252,55 @@ define("em-table/templates/components/em-table", ["exports"], function (exports)
           morphs[0] = dom.createMorphAt(dom.childAt(fragment, [1]), 0, 0);
           return morphs;
         },
-        statements: [["content", "message", ["loc", [null, [11, 30], [11, 41]]]]],
+        statements: [["content", "message", ["loc", [null, [19, 30], [19, 41]]]]],
         locals: [],
         templates: []
       };
     })();
-    var child2 = (function () {
+    var child3 = (function () {
       var child0 = (function () {
+        var child0 = (function () {
+          return {
+            meta: {
+              "fragmentReason": false,
+              "revision": "Ember@2.2.0",
+              "loc": {
+                "source": null,
+                "start": {
+                  "line": 24,
+                  "column": 8
+                },
+                "end": {
+                  "line": 33,
+                  "column": 8
+                }
+              },
+              "moduleName": "modules/em-table/templates/components/em-table.hbs"
+            },
+            isEmpty: false,
+            arity: 2,
+            cachedFragment: null,
+            hasRendered: false,
+            buildFragment: function buildFragment(dom) {
+              var el0 = dom.createDocumentFragment();
+              var el1 = dom.createTextNode("          ");
+              dom.appendChild(el0, el1);
+              var el1 = dom.createComment("");
+              dom.appendChild(el0, el1);
+              var el1 = dom.createTextNode("\n");
+              dom.appendChild(el0, el1);
+              return el0;
+            },
+            buildRenderNodes: function buildRenderNodes(dom, fragment, contextualElement) {
+              var morphs = new Array(1);
+              morphs[0] = dom.createMorphAt(fragment, 1, 1, contextualElement);
+              return morphs;
+            },
+            statements: [["inline", "em-table-column", [], ["rows", ["subexpr", "@mut", [["get", "_dataProcessor.processedRows", ["loc", [null, [26, 15], [26, 43]]]]], [], []], "definition", ["subexpr", "@mut", [["get", "column.definition", ["loc", [null, [27, 21], [27, 38]]]]], [], []], "defaultWidth", ["subexpr", "@mut", [["get", "column.width", ["loc", [null, [28, 23], [28, 35]]]]], [], []], "tableDefinition", ["subexpr", "@mut", [["get", "_definition", ["loc", [null, [29, 26], [29, 37]]]]], [], []], "dataProcessor", ["subexpr", "@mut", [["get", "_dataProcessor", ["loc", [null, [30, 24], [30, 38]]]]], [], []], "index", ["subexpr", "@mut", [["get", "colIndex", ["loc", [null, [31, 16], [31, 24]]]]], [], []]], ["loc", [null, [25, 10], [32, 12]]]]],
+            locals: ["column", "colIndex"],
+            templates: []
+          };
+        })();
         return {
           meta: {
             "fragmentReason": false,
@@ -111825,12 +113308,61 @@ define("em-table/templates/components/em-table", ["exports"], function (exports)
             "loc": {
               "source": null,
               "start": {
-                "line": 14,
-                "column": 6
+                "line": 22,
+                "column": 4
               },
               "end": {
-                "line": 23,
-                "column": 6
+                "line": 35,
+                "column": 4
+              }
+            },
+            "moduleName": "modules/em-table/templates/components/em-table.hbs"
+          },
+          isEmpty: false,
+          arity: 0,
+          cachedFragment: null,
+          hasRendered: false,
+          buildFragment: function buildFragment(dom) {
+            var el0 = dom.createDocumentFragment();
+            var el1 = dom.createTextNode("      ");
+            dom.appendChild(el0, el1);
+            var el1 = dom.createElement("div");
+            dom.setAttribute(el1, "class", "table-body-left");
+            var el2 = dom.createTextNode("\n");
+            dom.appendChild(el1, el2);
+            var el2 = dom.createComment("");
+            dom.appendChild(el1, el2);
+            var el2 = dom.createTextNode("      ");
+            dom.appendChild(el1, el2);
+            dom.appendChild(el0, el1);
+            var el1 = dom.createTextNode("\n");
+            dom.appendChild(el0, el1);
+            return el0;
+          },
+          buildRenderNodes: function buildRenderNodes(dom, fragment, contextualElement) {
+            var morphs = new Array(1);
+            morphs[0] = dom.createMorphAt(dom.childAt(fragment, [1]), 1, 1);
+            return morphs;
+          },
+          statements: [["block", "each", [["get", "_columns.left", ["loc", [null, [24, 16], [24, 29]]]]], [], 0, null, ["loc", [null, [24, 8], [33, 17]]]]],
+          locals: [],
+          templates: [child0]
+        };
+      })();
+      var child1 = (function () {
+        return {
+          meta: {
+            "fragmentReason": false,
+            "revision": "Ember@2.2.0",
+            "loc": {
+              "source": null,
+              "start": {
+                "line": 42,
+                "column": 8
+              },
+              "end": {
+                "line": 51,
+                "column": 8
               }
             },
             "moduleName": "modules/em-table/templates/components/em-table.hbs"
@@ -111841,7 +113373,7 @@ define("em-table/templates/components/em-table", ["exports"], function (exports)
           hasRendered: false,
           buildFragment: function buildFragment(dom) {
             var el0 = dom.createDocumentFragment();
-            var el1 = dom.createTextNode("        ");
+            var el1 = dom.createTextNode("          ");
             dom.appendChild(el0, el1);
             var el1 = dom.createComment("");
             dom.appendChild(el0, el1);
@@ -111854,9 +113386,100 @@ define("em-table/templates/components/em-table", ["exports"], function (exports)
             morphs[0] = dom.createMorphAt(fragment, 1, 1, contextualElement);
             return morphs;
           },
-          statements: [["inline", "em-table-column", [], ["rows", ["subexpr", "@mut", [["get", "_dataProcessor.processedRows", ["loc", [null, [16, 15], [16, 43]]]]], [], []], "definition", ["subexpr", "@mut", [["get", "column.definition", ["loc", [null, [17, 21], [17, 38]]]]], [], []], "defaultWidth", ["subexpr", "@mut", [["get", "column.width", ["loc", [null, [18, 23], [18, 35]]]]], [], []], "tableDefinition", ["subexpr", "@mut", [["get", "_definition", ["loc", [null, [19, 26], [19, 37]]]]], [], []], "dataProcessor", ["subexpr", "@mut", [["get", "_dataProcessor", ["loc", [null, [20, 24], [20, 38]]]]], [], []], "index", ["subexpr", "@mut", [["get", "colIndex", ["loc", [null, [21, 16], [21, 24]]]]], [], []]], ["loc", [null, [15, 8], [22, 10]]]]],
+          statements: [["inline", "em-table-column", [], ["rows", ["subexpr", "@mut", [["get", "_dataProcessor.processedRows", ["loc", [null, [44, 15], [44, 43]]]]], [], []], "definition", ["subexpr", "@mut", [["get", "column.definition", ["loc", [null, [45, 21], [45, 38]]]]], [], []], "defaultWidth", ["subexpr", "@mut", [["get", "column.width", ["loc", [null, [46, 23], [46, 35]]]]], [], []], "tableDefinition", ["subexpr", "@mut", [["get", "_definition", ["loc", [null, [47, 26], [47, 37]]]]], [], []], "dataProcessor", ["subexpr", "@mut", [["get", "_dataProcessor", ["loc", [null, [48, 24], [48, 38]]]]], [], []], "index", ["subexpr", "@mut", [["get", "colIndex", ["loc", [null, [49, 16], [49, 24]]]]], [], []]], ["loc", [null, [43, 10], [50, 12]]]]],
           locals: ["column", "colIndex"],
           templates: []
+        };
+      })();
+      var child2 = (function () {
+        var child0 = (function () {
+          return {
+            meta: {
+              "fragmentReason": false,
+              "revision": "Ember@2.2.0",
+              "loc": {
+                "source": null,
+                "start": {
+                  "line": 60,
+                  "column": 8
+                },
+                "end": {
+                  "line": 69,
+                  "column": 8
+                }
+              },
+              "moduleName": "modules/em-table/templates/components/em-table.hbs"
+            },
+            isEmpty: false,
+            arity: 2,
+            cachedFragment: null,
+            hasRendered: false,
+            buildFragment: function buildFragment(dom) {
+              var el0 = dom.createDocumentFragment();
+              var el1 = dom.createTextNode("          ");
+              dom.appendChild(el0, el1);
+              var el1 = dom.createComment("");
+              dom.appendChild(el0, el1);
+              var el1 = dom.createTextNode("\n");
+              dom.appendChild(el0, el1);
+              return el0;
+            },
+            buildRenderNodes: function buildRenderNodes(dom, fragment, contextualElement) {
+              var morphs = new Array(1);
+              morphs[0] = dom.createMorphAt(fragment, 1, 1, contextualElement);
+              return morphs;
+            },
+            statements: [["inline", "em-table-column", [], ["rows", ["subexpr", "@mut", [["get", "_dataProcessor.processedRows", ["loc", [null, [62, 15], [62, 43]]]]], [], []], "definition", ["subexpr", "@mut", [["get", "column.definition", ["loc", [null, [63, 21], [63, 38]]]]], [], []], "defaultWidth", ["subexpr", "@mut", [["get", "column.width", ["loc", [null, [64, 23], [64, 35]]]]], [], []], "tableDefinition", ["subexpr", "@mut", [["get", "_definition", ["loc", [null, [65, 26], [65, 37]]]]], [], []], "dataProcessor", ["subexpr", "@mut", [["get", "_dataProcessor", ["loc", [null, [66, 24], [66, 38]]]]], [], []], "index", ["subexpr", "@mut", [["get", "colIndex", ["loc", [null, [67, 16], [67, 24]]]]], [], []]], ["loc", [null, [61, 10], [68, 12]]]]],
+            locals: ["column", "colIndex"],
+            templates: []
+          };
+        })();
+        return {
+          meta: {
+            "fragmentReason": false,
+            "revision": "Ember@2.2.0",
+            "loc": {
+              "source": null,
+              "start": {
+                "line": 58,
+                "column": 4
+              },
+              "end": {
+                "line": 71,
+                "column": 4
+              }
+            },
+            "moduleName": "modules/em-table/templates/components/em-table.hbs"
+          },
+          isEmpty: false,
+          arity: 0,
+          cachedFragment: null,
+          hasRendered: false,
+          buildFragment: function buildFragment(dom) {
+            var el0 = dom.createDocumentFragment();
+            var el1 = dom.createTextNode("      ");
+            dom.appendChild(el0, el1);
+            var el1 = dom.createElement("div");
+            dom.setAttribute(el1, "class", "table-body-right");
+            var el2 = dom.createTextNode("\n");
+            dom.appendChild(el1, el2);
+            var el2 = dom.createComment("");
+            dom.appendChild(el1, el2);
+            var el2 = dom.createTextNode("      ");
+            dom.appendChild(el1, el2);
+            dom.appendChild(el0, el1);
+            var el1 = dom.createTextNode("\n");
+            dom.appendChild(el0, el1);
+            return el0;
+          },
+          buildRenderNodes: function buildRenderNodes(dom, fragment, contextualElement) {
+            var morphs = new Array(1);
+            morphs[0] = dom.createMorphAt(dom.childAt(fragment, [1]), 1, 1);
+            return morphs;
+          },
+          statements: [["block", "each", [["get", "_columns.right", ["loc", [null, [60, 16], [60, 30]]]]], [], 0, null, ["loc", [null, [60, 8], [69, 17]]]]],
+          locals: [],
+          templates: [child0]
         };
       })();
       return {
@@ -111866,11 +113489,11 @@ define("em-table/templates/components/em-table", ["exports"], function (exports)
           "loc": {
             "source": null,
             "start": {
-              "line": 12,
+              "line": 20,
               "column": 2
             },
             "end": {
-              "line": 25,
+              "line": 72,
               "column": 2
             }
           },
@@ -111882,16 +113505,97 @@ define("em-table/templates/components/em-table", ["exports"], function (exports)
         hasRendered: false,
         buildFragment: function buildFragment(dom) {
           var el0 = dom.createDocumentFragment();
-          var el1 = dom.createTextNode("    ");
+          var el1 = dom.createComment("");
+          dom.appendChild(el0, el1);
+          var el1 = dom.createTextNode("\n    ");
+          dom.appendChild(el0, el1);
+          var el1 = dom.createElement("span");
+          dom.setAttribute(el1, "class", "left-scroll-shadow");
+          var el2 = dom.createTextNode("\n      ");
+          dom.appendChild(el1, el2);
+          var el2 = dom.createElement("span");
+          dom.setAttribute(el2, "class", "shadow-container");
+          dom.appendChild(el1, el2);
+          var el2 = dom.createTextNode("\n    ");
+          dom.appendChild(el1, el2);
+          dom.appendChild(el0, el1);
+          var el1 = dom.createTextNode("\n    ");
           dom.appendChild(el0, el1);
           var el1 = dom.createElement("div");
-          dom.setAttribute(el1, "class", "table-scroll-body");
-          var el2 = dom.createTextNode("\n");
+          dom.setAttribute(el1, "class", "table-body");
+          var el2 = dom.createTextNode("\n      ");
           dom.appendChild(el1, el2);
-          var el2 = dom.createComment("");
+          var el2 = dom.createElement("div");
+          dom.setAttribute(el2, "class", "table-scroll-body");
+          var el3 = dom.createTextNode("\n");
+          dom.appendChild(el2, el3);
+          var el3 = dom.createComment("");
+          dom.appendChild(el2, el3);
+          var el3 = dom.createTextNode("      ");
+          dom.appendChild(el2, el3);
           dom.appendChild(el1, el2);
-          var el2 = dom.createTextNode("    ");
+          var el2 = dom.createTextNode("\n    ");
           dom.appendChild(el1, el2);
+          dom.appendChild(el0, el1);
+          var el1 = dom.createTextNode("\n    ");
+          dom.appendChild(el0, el1);
+          var el1 = dom.createElement("span");
+          dom.setAttribute(el1, "class", "right-scroll-shadow");
+          var el2 = dom.createTextNode("\n      ");
+          dom.appendChild(el1, el2);
+          var el2 = dom.createElement("span");
+          dom.setAttribute(el2, "class", "shadow-container");
+          dom.appendChild(el1, el2);
+          var el2 = dom.createTextNode("\n    ");
+          dom.appendChild(el1, el2);
+          dom.appendChild(el0, el1);
+          var el1 = dom.createTextNode("\n\n");
+          dom.appendChild(el0, el1);
+          var el1 = dom.createComment("");
+          dom.appendChild(el0, el1);
+          return el0;
+        },
+        buildRenderNodes: function buildRenderNodes(dom, fragment, contextualElement) {
+          var morphs = new Array(3);
+          morphs[0] = dom.createMorphAt(fragment, 0, 0, contextualElement);
+          morphs[1] = dom.createMorphAt(dom.childAt(fragment, [4, 1]), 1, 1);
+          morphs[2] = dom.createMorphAt(fragment, 8, 8, contextualElement);
+          dom.insertBoundary(fragment, 0);
+          dom.insertBoundary(fragment, null);
+          return morphs;
+        },
+        statements: [["block", "if", [["get", "_columns.left.length", ["loc", [null, [22, 10], [22, 30]]]]], [], 0, null, ["loc", [null, [22, 4], [35, 11]]]], ["block", "each", [["get", "_columns.center", ["loc", [null, [42, 16], [42, 31]]]]], [], 1, null, ["loc", [null, [42, 8], [51, 17]]]], ["block", "if", [["get", "_columns.right.length", ["loc", [null, [58, 10], [58, 31]]]]], [], 2, null, ["loc", [null, [58, 4], [71, 11]]]]],
+        locals: [],
+        templates: [child0, child1, child2]
+      };
+    })();
+    var child4 = (function () {
+      return {
+        meta: {
+          "fragmentReason": false,
+          "revision": "Ember@2.2.0",
+          "loc": {
+            "source": null,
+            "start": {
+              "line": 75,
+              "column": 4
+            },
+            "end": {
+              "line": 77,
+              "column": 4
+            }
+          },
+          "moduleName": "modules/em-table/templates/components/em-table.hbs"
+        },
+        isEmpty: false,
+        arity: 0,
+        cachedFragment: null,
+        hasRendered: false,
+        buildFragment: function buildFragment(dom) {
+          var el0 = dom.createDocumentFragment();
+          var el1 = dom.createTextNode("      ");
+          dom.appendChild(el0, el1);
+          var el1 = dom.createComment("");
           dom.appendChild(el0, el1);
           var el1 = dom.createTextNode("\n");
           dom.appendChild(el0, el1);
@@ -111899,15 +113603,15 @@ define("em-table/templates/components/em-table", ["exports"], function (exports)
         },
         buildRenderNodes: function buildRenderNodes(dom, fragment, contextualElement) {
           var morphs = new Array(1);
-          morphs[0] = dom.createMorphAt(dom.childAt(fragment, [1]), 1, 1);
+          morphs[0] = dom.createMorphAt(fragment, 1, 1, contextualElement);
           return morphs;
         },
-        statements: [["block", "each", [["get", "_columns", ["loc", [null, [14, 14], [14, 22]]]]], [], 0, null, ["loc", [null, [14, 6], [23, 15]]]]],
+        statements: [["inline", "component", [["get", "rightPanelComponentName", ["loc", [null, [76, 18], [76, 41]]]]], ["tableDefinition", ["subexpr", "@mut", [["get", "_definition", ["loc", [null, [76, 58], [76, 69]]]]], [], []], "dataProcessor", ["subexpr", "@mut", [["get", "_dataProcessor", ["loc", [null, [76, 84], [76, 98]]]]], [], []]], ["loc", [null, [76, 6], [76, 100]]]]],
         locals: [],
-        templates: [child0]
+        templates: []
       };
     })();
-    var child3 = (function () {
+    var child5 = (function () {
       var child0 = (function () {
         return {
           meta: {
@@ -111916,11 +113620,11 @@ define("em-table/templates/components/em-table", ["exports"], function (exports)
             "loc": {
               "source": null,
               "start": {
-                "line": 31,
+                "line": 84,
                 "column": 4
               },
               "end": {
-                "line": 33,
+                "line": 86,
                 "column": 4
               }
             },
@@ -111945,7 +113649,7 @@ define("em-table/templates/components/em-table", ["exports"], function (exports)
             morphs[0] = dom.createMorphAt(fragment, 1, 1, contextualElement);
             return morphs;
           },
-          statements: [["inline", "component", [["get", "componentName", ["loc", [null, [32, 18], [32, 31]]]]], ["tableDefinition", ["subexpr", "@mut", [["get", "_definition", ["loc", [null, [32, 48], [32, 59]]]]], [], []], "dataProcessor", ["subexpr", "@mut", [["get", "_dataProcessor", ["loc", [null, [32, 74], [32, 88]]]]], [], []]], ["loc", [null, [32, 6], [32, 90]]]]],
+          statements: [["inline", "component", [["get", "componentName", ["loc", [null, [85, 18], [85, 31]]]]], ["tableDefinition", ["subexpr", "@mut", [["get", "_definition", ["loc", [null, [85, 48], [85, 59]]]]], [], []], "dataProcessor", ["subexpr", "@mut", [["get", "_dataProcessor", ["loc", [null, [85, 74], [85, 88]]]]], [], []]], ["loc", [null, [85, 6], [85, 90]]]]],
           locals: ["componentName"],
           templates: []
         };
@@ -111957,11 +113661,11 @@ define("em-table/templates/components/em-table", ["exports"], function (exports)
           "loc": {
             "source": null,
             "start": {
-              "line": 29,
+              "line": 82,
               "column": 0
             },
             "end": {
-              "line": 35,
+              "line": 88,
               "column": 0
             }
           },
@@ -111993,7 +113697,7 @@ define("em-table/templates/components/em-table", ["exports"], function (exports)
           morphs[0] = dom.createMorphAt(dom.childAt(fragment, [1]), 1, 1);
           return morphs;
         },
-        statements: [["block", "each", [["get", "footerComponentNames", ["loc", [null, [31, 12], [31, 32]]]]], [], 0, null, ["loc", [null, [31, 4], [33, 13]]]]],
+        statements: [["block", "each", [["get", "footerComponentNames", ["loc", [null, [84, 12], [84, 32]]]]], [], 0, null, ["loc", [null, [84, 4], [86, 13]]]]],
         locals: [],
         templates: [child0]
       };
@@ -112012,7 +113716,7 @@ define("em-table/templates/components/em-table", ["exports"], function (exports)
             "column": 0
           },
           "end": {
-            "line": 36,
+            "line": 89,
             "column": 0
           }
         },
@@ -112024,6 +113728,10 @@ define("em-table/templates/components/em-table", ["exports"], function (exports)
       hasRendered: false,
       buildFragment: function buildFragment(dom) {
         var el0 = dom.createDocumentFragment();
+        var el1 = dom.createElement("style");
+        dom.appendChild(el0, el1);
+        var el1 = dom.createTextNode("\n\n");
+        dom.appendChild(el0, el1);
         var el1 = dom.createElement("div");
         dom.setAttribute(el1, "class", "table-header");
         var el2 = dom.createTextNode("\n");
@@ -112034,10 +113742,34 @@ define("em-table/templates/components/em-table", ["exports"], function (exports)
         var el1 = dom.createTextNode("\n\n");
         dom.appendChild(el0, el1);
         var el1 = dom.createElement("div");
-        dom.setAttribute(el1, "class", "table-body");
-        var el2 = dom.createTextNode("\n");
+        dom.setAttribute(el1, "class", "table-mid");
+        var el2 = dom.createTextNode("\n  ");
+        dom.appendChild(el1, el2);
+        var el2 = dom.createElement("div");
+        dom.setAttribute(el2, "class", "table-panel-left");
+        var el3 = dom.createTextNode("\n");
+        dom.appendChild(el2, el3);
+        var el3 = dom.createComment("");
+        dom.appendChild(el2, el3);
+        var el3 = dom.createTextNode("  ");
+        dom.appendChild(el2, el3);
+        dom.appendChild(el1, el2);
+        var el2 = dom.createTextNode("\n\n");
         dom.appendChild(el1, el2);
         var el2 = dom.createComment("");
+        dom.appendChild(el1, el2);
+        var el2 = dom.createTextNode("\n  ");
+        dom.appendChild(el1, el2);
+        var el2 = dom.createElement("div");
+        dom.setAttribute(el2, "class", "table-panel-right");
+        var el3 = dom.createTextNode("\n");
+        dom.appendChild(el2, el3);
+        var el3 = dom.createComment("");
+        dom.appendChild(el2, el3);
+        var el3 = dom.createTextNode("  ");
+        dom.appendChild(el2, el3);
+        dom.appendChild(el1, el2);
+        var el2 = dom.createTextNode("\n");
         dom.appendChild(el1, el2);
         dom.appendChild(el0, el1);
         var el1 = dom.createTextNode("\n\n");
@@ -112047,35 +113779,44 @@ define("em-table/templates/components/em-table", ["exports"], function (exports)
         return el0;
       },
       buildRenderNodes: function buildRenderNodes(dom, fragment, contextualElement) {
-        var morphs = new Array(3);
-        morphs[0] = dom.createMorphAt(dom.childAt(fragment, [0]), 1, 1);
-        morphs[1] = dom.createMorphAt(dom.childAt(fragment, [2]), 1, 1);
-        morphs[2] = dom.createMorphAt(fragment, 4, 4, contextualElement);
+        var element0 = dom.childAt(fragment, [4]);
+        var morphs = new Array(5);
+        morphs[0] = dom.createMorphAt(dom.childAt(fragment, [2]), 1, 1);
+        morphs[1] = dom.createMorphAt(dom.childAt(element0, [1]), 1, 1);
+        morphs[2] = dom.createMorphAt(element0, 3, 3);
+        morphs[3] = dom.createMorphAt(dom.childAt(element0, [5]), 1, 1);
+        morphs[4] = dom.createMorphAt(fragment, 6, 6, contextualElement);
         dom.insertBoundary(fragment, null);
         return morphs;
       },
-      statements: [["block", "each", [["get", "headerComponentNames", ["loc", [null, [3, 10], [3, 30]]]]], [], 0, null, ["loc", [null, [3, 2], [5, 11]]]], ["block", "if", [["get", "message", ["loc", [null, [10, 8], [10, 15]]]]], [], 1, 2, ["loc", [null, [10, 2], [25, 9]]]], ["block", "if", [["get", "displayFooter", ["loc", [null, [29, 6], [29, 19]]]]], [], 3, null, ["loc", [null, [29, 0], [35, 7]]]]],
+      statements: [["block", "each", [["get", "headerComponentNames", ["loc", [null, [6, 10], [6, 30]]]]], [], 0, null, ["loc", [null, [6, 2], [8, 11]]]], ["block", "if", [["get", "leftPanelComponentName", ["loc", [null, [13, 10], [13, 32]]]]], [], 1, null, ["loc", [null, [13, 4], [15, 11]]]], ["block", "if", [["get", "message", ["loc", [null, [18, 8], [18, 15]]]]], [], 2, 3, ["loc", [null, [18, 2], [72, 9]]]], ["block", "if", [["get", "rightPanelComponentName", ["loc", [null, [75, 10], [75, 33]]]]], [], 4, null, ["loc", [null, [75, 4], [77, 11]]]], ["block", "if", [["get", "displayFooter", ["loc", [null, [82, 6], [82, 19]]]]], [], 5, null, ["loc", [null, [82, 0], [88, 7]]]]],
       locals: [],
-      templates: [child0, child1, child2, child3]
+      templates: [child0, child1, child2, child3, child4, child5]
     };
   })());
 });
-define('em-table/utils/column-definition', ['exports', 'ember'], function (exports, _ember) {
+define('em-table/utils/column-definition', ['exports', 'ember', 'em-table/utils/facet-types'], function (exports, _ember, _emTableUtilsFacetTypes) {
   'use strict';
 
   function getContentAtPath(row) {
     var contentPath = this.get('contentPath');
 
     if (contentPath) {
-      return row.get(contentPath);
+      return _ember['default'].get(row, contentPath);
     } else {
       throw new Error("contentPath not set!");
     }
   }
 
+  function returnEmptyString() {
+    return "";
+  }
+
   var ColumnDefinition = _ember['default'].Object.extend({
     id: "",
     headerTitle: "Not Available!",
+
+    classNames: [],
 
     cellComponentName: null,
 
@@ -112083,12 +113824,17 @@ define('em-table/utils/column-definition', ['exports', 'ember'], function (expor
     enableSort: true,
     enableColumnResize: true,
 
+    width: null,
     minWidth: "150px",
 
     contentPath: null,
     observePath: false,
 
     cellDefinition: null,
+
+    pin: "center",
+
+    facetType: _emTableUtilsFacetTypes['default'].VALUES,
 
     beforeSort: null,
     getCellContent: getContentAtPath,
@@ -112138,9 +113884,21 @@ define('em-table/utils/column-definition', ['exports', 'ember'], function (expor
     }
   };
 
+  ColumnDefinition.fillerColumn = ColumnDefinition.create({
+    id: "fillerColumn",
+    headerTitle: "",
+    getCellContent: returnEmptyString,
+    getSearchValue: returnEmptyString,
+    getSortValue: returnEmptyString,
+
+    enableSearch: false,
+    enableSort: false,
+    enableColumnResize: false
+  });
+
   exports['default'] = ColumnDefinition;
 });
-define('em-table/utils/data-processor', ['exports', 'ember'], function (exports, _ember) {
+define('em-table/utils/data-processor', ['exports', 'ember', 'em-table/utils/sql'], function (exports, _ember, _emTableUtilsSql) {
   'use strict';
 
   /**
@@ -112152,9 +113910,12 @@ define('em-table/utils/data-processor', ['exports', 'ember'], function (exports,
 
     tableDefinition: null,
 
+    sql: _emTableUtilsSql['default'].create(),
+
     rows: [],
     _sortedRows: [],
     _searchedRows: [],
+    _facetFilteredRows: [],
 
     _searchObserver: _ember['default'].on("init", _ember['default'].observer('tableDefinition.searchText', '_sortedRows.[]', function () {
       _ember['default'].run.once(this, "startSearch");
@@ -112164,39 +113925,53 @@ define('em-table/utils/data-processor', ['exports', 'ember'], function (exports,
       _ember['default'].run.once(this, "startSort");
     })),
 
+    _facetedFilterObserver: _ember['default'].on("init", _ember['default'].observer('tableDefinition.facetConditions', '_searchedRows.[]', function () {
+      _ember['default'].run.once(this, "startFacetedFilter");
+    })),
+
+    regexSearch: function regexSearch(clause, rows, columns) {
+      var regex = new RegExp(clause, "i");
+
+      function checkRow(column) {
+        var value;
+        if (!column.get('enableSearch')) {
+          return false;
+        }
+        value = column.getSearchValue(this);
+
+        if (typeof value === 'string') {
+          value = value.toLowerCase();
+          return value.match(regex);
+        }
+
+        return false;
+      }
+
+      return rows.filter(function (row) {
+        return columns.some(checkRow, row);
+      });
+    },
+
     startSearch: function startSearch() {
-      var searchText = this.get('tableDefinition.searchText'),
+      var searchText = String(this.get('tableDefinition.searchText')),
           rows = this.get('_sortedRows') || [],
           columns = this.get('tableDefinition.columns'),
-          then = this;
+          that = this;
 
       if (searchText) {
         this.set("isSearching", true);
 
-        searchText = searchText.toLowerCase();
-
         _ember['default'].run.later(function () {
-          function checkRow(column) {
-            var value;
-            if (!column.get('enableSearch')) {
-              return false;
-            }
-            value = column.getSearchValue(this);
+          var result;
 
-            if (typeof value === 'string') {
-              value = value.toLowerCase();
-              return value.match(searchText);
-            }
-
-            return false;
+          if (that.get("sql").validateClause(searchText, columns)) {
+            result = that.get("sql").search(searchText, rows, columns);
+          } else {
+            result = that.regexSearch(searchText, rows, columns);
           }
 
-          rows = rows.filter(function (row) {
-            return columns.some(checkRow, row);
-          });
-
-          then.setProperties({
-            _searchedRows: rows,
+          that.setProperties({
+            _searchedRows: result,
             isSearching: false
           });
         });
@@ -112224,12 +113999,21 @@ define('em-table/utils/data-processor', ['exports', 'ember'], function (exports,
 
     startSort: function startSort() {
       var rows = this.get('rows'),
+          tableDefinition = this.get('tableDefinition'),
           sortColumnId = this.get('tableDefinition.sortColumnId'),
-          column = this.get('tableDefinition.columns').find(function (element) {
-        return element.get('id') === sortColumnId;
-      }),
           descending = this.get('tableDefinition.sortOrder') === 'desc',
-          that = this;
+          that = this,
+          column;
+
+      if (tableDefinition) {
+        column = tableDefinition.get('columns').find(function (element) {
+          return element.get('id') === sortColumnId;
+        });
+      }
+
+      if (rows && Array.isArray(rows.content)) {
+        rows = rows.toArray();
+      }
 
       if (rows && rows.get('length') > 0 && column) {
         this.set('isSorting', true);
@@ -112267,16 +114051,222 @@ define('em-table/utils/data-processor', ['exports', 'ember'], function (exports,
       }
     },
 
-    totalPages: _ember['default'].computed('_searchedRows.length', 'tableDefinition.rowCount', function () {
-      return Math.ceil(this.get('_searchedRows.length') / this.get('tableDefinition.rowCount'));
+    startFacetedFilter: function startFacetedFilter() {
+      var clause = this.get("sql").createFacetClause(this.get('tableDefinition.facetConditions'), this.get("tableDefinition.columns")),
+          rows = this.get('_searchedRows') || [],
+          columns = this.get('tableDefinition.columns'),
+          that = this;
+
+      if (clause && columns) {
+        this.set("isSearching", true);
+
+        _ember['default'].run.later(function () {
+          var result = that.get("sql").search(clause, rows, columns);
+
+          that.setProperties({
+            _facetFilteredRows: result,
+            isSearching: false
+          });
+        });
+      } else {
+        this.set("_facetFilteredRows", rows);
+      }
+    },
+
+    facetedFields: _ember['default'].computed('_searchedRows.[]', 'tableDefinition.columns', function () {
+      var searchedRows = this.get("_searchedRows"),
+          columns = this.get('tableDefinition.columns'),
+          fields = [];
+
+      if (columns) {
+        columns.forEach(function (column) {
+          var facetedData;
+          if (column.facetType) {
+            facetedData = column.facetType.facetRows(column, searchedRows);
+            if (facetedData) {
+              fields.push({
+                column: column,
+                facets: facetedData
+              });
+            }
+          }
+        });
+      }
+
+      return fields;
     }),
 
+    pageDetails: _ember['default'].computed("tableDefinition.rowCount", "tableDefinition.pageNum", "_facetFilteredRows.length", function () {
+      var tableDefinition = this.get("tableDefinition"),
+          pageNum = tableDefinition.get('pageNum'),
+          rowCount = tableDefinition.get('rowCount'),
+          startIndex = (pageNum - 1) * rowCount,
+          totalRecords = this.get('_facetFilteredRows.length');
+
+      if (startIndex < 0) {
+        startIndex = 0;
+      }
+
+      return {
+        pageNum: pageNum,
+        totalPages: Math.ceil(totalRecords / rowCount),
+        rowCount: rowCount,
+
+        startIndex: startIndex,
+
+        fromRecord: totalRecords ? startIndex + 1 : 0,
+        toRecord: Math.min(startIndex + rowCount, totalRecords),
+        totalRecords: totalRecords
+      };
+    }),
+    totalPages: _ember['default'].computed.alias("pageDetails.totalPages"), // Adding an alias for backward compatibility
+
     // Paginate
-    processedRows: _ember['default'].computed('_searchedRows.[]', 'tableDefinition.rowCount', 'tableDefinition.pageNum', function () {
+    processedRows: _ember['default'].computed('_facetFilteredRows.[]', 'tableDefinition.rowCount', 'tableDefinition.pageNum', function () {
       var rowCount = this.get('tableDefinition.rowCount'),
           startIndex = (this.get('tableDefinition.pageNum') - 1) * rowCount;
-      return this.get('_searchedRows').slice(startIndex, startIndex + rowCount);
+      return this.get('_facetFilteredRows').slice(startIndex, startIndex + rowCount);
     })
+  });
+});
+define("em-table/utils/facet-types", ["exports", "ember"], function (exports, _ember) {
+  "use strict";
+
+  var facetTypes = {
+    VALUES: {
+      componentName: "em-table-facet-panel-values",
+
+      toClause: function toClause(column, facetConditions) {
+        var values,
+            clauses = [];
+
+        if (facetConditions) {
+          if (_ember["default"].get(facetConditions, "in.length")) {
+            values = facetConditions["in"].map(function (value) {
+              value = value.replace(/'/g, "''");
+              return "'" + value + "'";
+            });
+            clauses.push(column.id + " IN (" + values + ")");
+          }
+
+          if (_ember["default"].get(facetConditions, "notIn.length")) {
+            values = facetConditions.notIn.map(function (value) {
+              value = value.replace(/'/g, "''");
+              return "'" + value + "'";
+            });
+            clauses.push(column.id + " NOT IN (" + values + ")");
+          }
+
+          return clauses.join(" AND ");
+        }
+      },
+
+      facetRows: function facetRows(column, rows) {
+        var facetedDataHash = {},
+            facetedDataArr = [];
+
+        rows.forEach(function (row) {
+          var value = column.getSearchValue(row);
+
+          if (typeof value === "string") {
+            if (!facetedDataHash[value]) {
+              facetedDataHash[value] = {
+                count: 0,
+                value: value
+              };
+              facetedDataArr.push(facetedDataHash[value]);
+            }
+            facetedDataHash[value].count++;
+          }
+        });
+
+        if (facetedDataArr.length) {
+          facetedDataArr = facetedDataArr.sort(function (a, b) {
+            return -(a.count - b.count); // Sort in reverse order
+          });
+          return facetedDataArr;
+        }
+      }
+    }
+  };
+
+  exports["default"] = facetTypes;
+});
+define("em-table/utils/sql", ["exports", "ember"], function (exports, _ember) {
+  /*global alasql*/
+
+  "use strict";
+
+  /*
+   * A wrapper around AlaSQL
+   */
+  exports["default"] = _ember["default"].Object.extend({
+
+    constructQuery: function constructQuery(clause) {
+      return "SELECT * FROM ? WHERE " + clause;
+    },
+
+    validateClause: function validateClause(clause, columns) {
+      var query = this.constructQuery(this.normaliseClause(clause, columns || [])),
+          valid = false;
+
+      if (clause.match(/\W/g)) {
+        // If it contain special characters including space
+        try {
+          alasql(query, [[{}]]);
+          valid = true;
+        } catch (e) {}
+      }
+
+      return valid;
+    },
+
+    createFacetClause: function createFacetClause(conditions, columns) {
+      if (conditions && columns) {
+        return columns.map(function (column) {
+          if (column.get("facetType")) {
+            return column.get("facetType.toClause")(column, conditions[_ember["default"].get(column, "id")]);
+          }
+        }).filter(function (clause) {
+          return clause;
+        }).join(" AND ");
+      }
+    },
+
+    normaliseClause: function normaliseClause(clause, columns) {
+      columns.forEach(function (column) {
+        var headerTitle = column.get("headerTitle");
+        clause = clause.replace(new RegExp("\"" + headerTitle + "\"", "gi"), column.get("id"));
+      });
+      return clause;
+    },
+
+    search: function search(clause, rows, columns) {
+      clause = this.normaliseClause(clause, columns);
+
+      // Convert into a form that alasql can digest easily
+      var dataSet = rows.map(function (row, index) {
+        var rowObj = {
+          _index_: index
+        };
+
+        columns.forEach(function (column) {
+          if (column.get("enableSearch") && row) {
+            rowObj[column.get("id")] = column.getSearchValue(row);
+          }
+        });
+
+        return rowObj;
+      });
+
+      // Search
+      dataSet = alasql(this.constructQuery(clause), [dataSet]);
+
+      return dataSet.map(function (data) {
+        return rows[data._index_];
+      });
+    }
+
   });
 });
 define('em-table/utils/table-definition', ['exports', 'ember'], function (exports, _ember) {
@@ -112290,10 +114280,17 @@ define('em-table/utils/table-definition', ['exports', 'ember'], function (export
     enableSearch: true,
     searchText: '',
 
+    // Faceting
+    enableFaceting: false,
+    facetConditions: null,
+    minFieldsForFilter: 15,
+    minValuesToDisplay: 2,
+
     // Sort
     enableSort: true,
     sortColumnId: '',
     sortOrder: '',
+    headerAsSortButton: false,
 
     // Pagination
     enablePagination: true,
@@ -112302,13 +114299,18 @@ define('em-table/utils/table-definition', ['exports', 'ember'], function (export
     rowCountOptions: [5, 10, 25, 50, 100],
 
     enableColumnResize: true,
+    showScrollShadow: false,
 
     minRowsForFooter: 25,
 
     columns: [],
 
-    _pageNumResetObserver: _ember['default'].observer('searchText', 'rowCount', function () {
+    _pageNumResetObserver: _ember['default'].observer('searchText', 'facetConditions', 'rowCount', function () {
       this.set('pageNum', 1);
+    }),
+
+    _facetResetObserver: _ember['default'].observer('searchText', function () {
+      this.set('facetConditions', null);
     })
 
   });
@@ -113328,7 +115330,7 @@ define('em-tgraph/utils/data-processor', ['exports', 'ember'], function (exports
    * Creates primary skeletal structure with vertices and inputs as nodes,
    * All child vertices & inputs will be added to an array property named children
    * As we are trying to treefy graph data, nodes might reoccur. Reject if its in
-   * the ancestral chain, and if the new depth is lower (Higher value) than the old
+   * the ancestral chain, and if the new depth is lower than the old
    * reposition the node.
    *
    * @param vertex {VertexDataNode} Root vertex of current sub tree
@@ -113344,13 +115346,16 @@ define('em-tgraph/utils/data-processor', ['exports', 'ember'], function (exports
       var child = _data.vertices.get(_data.edges.get(edgeId).get('inputVertexName'));
       if (!child.isSelfOrAncestor(vertex)) {
         if (child.depth) {
-          if (child.depth < depth) {
+          var siblings = child.get('outEdgeIds');
+          var shouldCompress = siblings ? siblings.length <= 2 : true;
+          var shouldDecompress = siblings ? siblings.length > 2 : false;
+          if (shouldCompress && child.depth > depth + 1 || shouldDecompress && child.depth < depth + 1) {
             parentChildren = child.get('treeParent.children');
             if (parentChildren) {
               parentChildren.removeObject(child);
             }
           } else {
-            return;
+            return child;
           }
         }
         child.setParent(vertex);
@@ -113414,48 +115419,52 @@ define('em-tgraph/utils/data-processor', ['exports', 'ember'], function (exports
   function _addOutputs(vertex) {
     var childVertices = vertex.get('children'),
         childrenWithOutputs = [],
-        midIndex,
         left = [],
         right = [];
 
     // For a symmetric display of output nodes
     if (childVertices && childVertices.length) {
-      midIndex = Math.floor(childVertices.length / 2);
-      if (childVertices.length % 2 === 0) {
-        midIndex--;
-      }
+      var middleChildIndex = Math.floor((childVertices.length - 1) / 2);
 
       childVertices.forEach(function (child, index) {
-        var additionals = _addOutputs(child),
-            outputs,
-            mid;
+        var additionals = _addOutputs(child);
+        var downstream = child.get('outEdgeIds');
+        var outputs = child.get('outputs');
 
-        childrenWithOutputs.push.apply(childrenWithOutputs, additionals.left);
-        childrenWithOutputs.push(child);
-        childrenWithOutputs.push.apply(childrenWithOutputs, additionals.right);
-
-        outputs = child.get('outputs');
+        if (!(outputs && outputs.length) || downstream) {
+          childrenWithOutputs.push.apply(childrenWithOutputs, additionals.left);
+          childrenWithOutputs.push(child);
+          childrenWithOutputs.push.apply(childrenWithOutputs, additionals.right);
+        }
         if (outputs && outputs.length) {
-          mid = outputs.length / 2;
-
-          outputs.forEach(function (output) {
-            output.depth = vertex.depth;
-          });
-
-          if (index < midIndex) {
-            left.push.apply(left, outputs);
-          } else if (index > midIndex) {
-            right.push.apply(right, outputs);
+          var middleOutputIndex = Math.floor((outputs.length - 1) / 2);
+          if (downstream) {
+            if (index < middleChildIndex) {
+              left.push.apply(left, outputs);
+            } else if (index > middleChildIndex) {
+              right.push.apply(right, outputs);
+            } else {
+              left.push.apply(left, outputs.slice(0, middleOutputIndex + 1));
+              right.push.apply(right, outputs.slice(middleOutputIndex + 1));
+            }
           } else {
-            left.push.apply(left, outputs.slice(mid));
-            right.push.apply(right, outputs.slice(0, mid));
+            outputs.forEach(function (output, index) {
+              output.depth = vertex.depth;
+              if (index === middleOutputIndex) {
+                var outputChildren = [];
+                outputChildren.push.apply(outputChildren, additionals.left);
+                outputChildren.push(child);
+                outputChildren.push.apply(outputChildren, additionals.right);
+                output._setChildren(outputChildren);
+              }
+              childrenWithOutputs.push(output);
+            });
           }
         }
       });
 
       vertex._setChildren(childrenWithOutputs);
     }
-
     return {
       left: left,
       right: right
@@ -120467,6 +122476,50 @@ define('ember-truth-helpers/helpers/is-array', ['exports', 'ember'], function (e
     }
     return true;
   }
+});
+define('ember-truth-helpers/helpers/is-equal', ['exports', 'ember'], function (exports, _ember) {
+  'use strict';
+
+  var _slicedToArray = (function () {
+    function sliceIterator(arr, i) {
+      var _arr = [];var _n = true;var _d = false;var _e = undefined;try {
+        for (var _i = arr[Symbol.iterator](), _s; !(_n = (_s = _i.next()).done); _n = true) {
+          _arr.push(_s.value);if (i && _arr.length === i) break;
+        }
+      } catch (err) {
+        _d = true;_e = err;
+      } finally {
+        try {
+          if (!_n && _i['return']) _i['return']();
+        } finally {
+          if (_d) throw _e;
+        }
+      }return _arr;
+    }return function (arr, i) {
+      if (Array.isArray(arr)) {
+        return arr;
+      } else if (Symbol.iterator in Object(arr)) {
+        return sliceIterator(arr, i);
+      } else {
+        throw new TypeError('Invalid attempt to destructure non-iterable instance');
+      }
+    };
+  })();
+
+  exports.isEqual = isEqual;
+
+  var emberIsEqual = _ember['default'].isEqual;
+
+  function isEqual(_ref) {
+    var _ref2 = _slicedToArray(_ref, 2);
+
+    var a = _ref2[0];
+    var b = _ref2[1];
+
+    return emberIsEqual(a, b);
+  }
+
+  exports['default'] = _ember['default'].Helper.helper(isEqual);
 });
 define('ember-truth-helpers/helpers/lt', ['exports'], function (exports) {
   'use strict';
