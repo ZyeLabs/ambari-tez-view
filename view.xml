@@ -17,8 +17,8 @@ limitations under the License. Kerberos, LDAP, Custom. Binary/Htt
 <view>
   <name>TEZ</name>
   <label>Tez View</label>
-  <version>0.7.0.2.6.2.0-205</version>
-  <build>267</build>
+  <version>0.9.2</version>
+  <build></build>
   <description>Ambari view for Apache Tez</description>
 
   <parameter>
@@ -87,7 +87,7 @@ limitations under the License. Kerberos, LDAP, Custom. Binary/Htt
     <name>TEZ_CLUSTER_INSTANCE</name>
     <label>Tez View</label>
     <description>Monitor and debug all Tez jobs, submitted by Hive queries and Pig scripts (auto-created)</description>
-    <stack-id>HDP-2.*</stack-id>
+    <stack-id>HDP-3.*</stack-id>
     <services>
       <service>TEZ</service>
     </services>
